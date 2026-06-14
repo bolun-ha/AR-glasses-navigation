@@ -66,6 +66,28 @@ export default function App() {
     searchResultsRef.current = searchResults;
   }, [searchResults]);
 
+  // Clear voice assistant system message whenever the user clicks any button or clickable control
+  const [clickedAnyButton, setClickedAnyButton] = useState(false);
+
+  useEffect(() => {
+    const handleGlobalClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        target && 
+        (target.closest('button') || 
+         target.closest('[role="button"]') || 
+         target.closest('input[type="submit"]') || 
+         target.closest('input[type="button"]') ||
+         target.tagName === 'BUTTON')
+      ) {
+        setSystemMessage("");
+        setClickedAnyButton(true);
+      }
+    };
+    document.addEventListener('click', handleGlobalClick, { capture: true });
+    return () => document.removeEventListener('click', handleGlobalClick, { capture: true });
+  }, []);
+
   const [isListening, setIsListening] = useState(false);
   const [inputText, setInputText] = useState("");
   const [systemMessage, setSystemMessage] = useState("Hello! I am your voice assistant. Try saying 'I want to go to McDonalds'.");
@@ -921,7 +943,7 @@ export default function App() {
         ) : (
           <>
             {/* Massive Directional Overlay (Non-blocking) */}
-        {!showManualSearch && !destination && searchResults.length === 0 && (
+        {!showManualSearch && !destination && searchResults.length === 0 && !clickedAnyButton && (
           <div className="px-8 pt-8 flex flex-col justify-start z-10 pointer-events-none drop-shadow-[0_4px_20px_rgba(0,0,0,0.8)]">
             <div className="text-[70px] sm:text-[100px] md:text-[140px] font-black leading-[0.8] tracking-tighter uppercase text-white">
               VOICE<span className="text-[#EFFF33]">NAV</span>

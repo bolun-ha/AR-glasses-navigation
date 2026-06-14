@@ -14,7 +14,6 @@
     "@amap/amap-jsapi-loader": "^1.0.1",
     "@google/genai": "^1.52.0",
     "@tailwindcss/vite": "^4.1.14",
-    "@vis.gl/react-google-maps": "^1.8.3",
     "@vitejs/plugin-react": "^5.0.4",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
