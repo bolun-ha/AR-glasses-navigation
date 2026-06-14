@@ -1,0 +1,11 @@
+{
+  "name": "VoiceNav",
+  "description": "Real-time voice-guided navigation with customizable routing and AI assistance.",
+  "requestFramePermissions": [
+    "geolocation",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
