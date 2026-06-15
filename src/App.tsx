@@ -288,10 +288,13 @@ export default function App() {
               </div>
             </div>
             <span className={`text-lg font-black block tracking-tighter ${textHex} font-mono mt-1 leading-none`}>
-              {currentStep.distanceLeftMeters >= 1000 
-                ? `${(currentStep.distanceLeftMeters / 1000).toFixed(1)} KM` 
-                : `${currentStep.distanceLeftMeters} M`
+              {currentStep.distanceMeters >= 1000 
+                ? `${(currentStep.distanceMeters / 1000).toFixed(1)} KM` 
+                : `${currentStep.distanceMeters} M`
               }
+            </span>
+            <span className="text-[7.5px] text-white/60 block max-w-[120px] truncate uppercase font-bold mt-1">
+              NEXT TURN
             </span>
             <span className="text-[7.5px] text-white/60 block max-w-[120px] truncate uppercase font-bold mt-1">
               {currentStep.action === 'left' && "准备左转弯"}
