@@ -2,6 +2,23 @@ import { useEffect, useRef, useState } from 'react';
 import AMapLoader from '@amap/amap-jsapi-loader';
 import { PlaceModel } from '../services/gemini';
 
+// Route step data type — maps 1:1 to AMap route step segments
+export interface RouteStep {
+  text: string;           // Navigation instruction text
+  action: 'start' | 'straight' | 'left' | 'right' | 'waypoint' | 'arrive';
+  location: { lat: number; lng: number };
+  distanceMeters: number; // Distance of this step segment
+  timeSeconds: number;    // Time of this step segment
+  totalDistanceMeters: number; // Cumulative remaining distance to destination
+  totalTimeSeconds: number;    // Cumulative remaining time to destination
+}
+
+export interface RouteInfo {
+  distanceMeters: number;
+  timeSeconds: number;
+  steps: RouteStep[];
+}
+
 const AMAP_KEY =
   process.env.AMAP_KEY ||
   (import.meta as any).env?.VITE_AMAP_KEY ||
@@ -35,7 +52,7 @@ export function MapWrapper({
   searchResults: PlaceModel[],
   simulatedLocation?: {lat: number, lng: number} | null,
   hideControls?: boolean
-  onRouteUpdate?: (info: {distanceMeters: number, timeSeconds: number}) => void
+  onRouteUpdate?: (info: RouteInfo) => void
 }) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
@@ -240,6 +257,85 @@ export function MapWrapper({
 
   }, [searchResults]);
 
+  // Helper: convert AMap route steps into our RouteStep[] format
+  function parseAMapSteps(route: any, destinationName?: string): RouteStep[] {
+    if (!route?.steps) return [];
+    const result: RouteStep[] = [];
+    let totalDist = route.distance || 0;
+    let totalTime = route.time || 0;
+    let cumDist = totalDist;
+    let cumTime = totalTime;
+
+    // Helper: determine action type from instruction text
+    const detectAction = (instruction: string, isLast: boolean): RouteStep['action'] => {
+      if (isLast) return 'arrive';
+      const lower = instruction.toLowerCase();
+      if (lower.includes('左') || lower.includes('左转') || lower.includes('向左')) return 'left';
+      if (lower.includes('右') || lower.includes('右转') || lower.includes('向右') || lower.includes('右拐')) return 'right';
+      if (lower.includes('直')) return 'straight';
+      return 'straight';
+    };
+
+    // Add start step
+    result.push({
+      text: `准备出发。全程预计行驶${(totalDist / 1000).toFixed(1)}公里，大约需要${Math.round(totalTime / 60)}分钟。`,
+      action: 'start',
+      location: { lat: route.steps[0].start_location.lat, lng: route.steps[0].start_location.lng },
+      distanceMeters: totalDist,
+      timeSeconds: totalTime,
+      totalDistanceMeters: totalDist,
+      totalTimeSeconds: totalTime,
+    });
+
+    for (let i = 0; i < route.steps.length; i++) {
+      const step = route.steps[i];
+      const isLast = i === route.steps.length - 1;
+      const stepDist = step.distance || 0;
+      const stepTime = step.time || 0;
+      cumDist -= stepDist;
+      if (cumDist < 0) cumDist = 0;
+      cumTime -= stepTime;
+      if (cumTime < 0) cumTime = 0;
+      
+      // Extract coordinates from path
+      const path = step.path || [];
+      const midCoord = path.length > 1
+        ? path[Math.floor(path.length / 2)]
+        : (path[0] || { lat: 0, lng: 0 });
+      
+      // Clean HTML tags from instruction
+      const cleanText = step.instruction?.replace(/<[^>]*>/g, '') || '';
+      
+      result.push({
+        text: cleanText,
+        action: detectAction(cleanText, isLast),
+        location: { lat: midCoord.lat, lng: midCoord.lng },
+        distanceMeters: stepDist,
+        timeSeconds: stepTime,
+        totalDistanceMeters: Math.max(cumDist, 0),
+        totalTimeSeconds: Math.max(cumTime, 0),
+      });
+    }
+
+    // Add explicit arrival step if last step isn't already "arrive"
+    const lastStep = route.steps[route.steps.length - 1];
+    if (lastStep) {
+      const endPath = lastStep.path || [];
+      const endLoc = endPath[endPath.length - 1] || { lat: 0, lng: 0 };
+      result.push({
+        text: `您已到达${destinationName || '目的地'}附近。本次导航服务已全部完成。`,
+        action: 'arrive',
+        location: { lat: endLoc.lat, lng: endLoc.lng },
+        distanceMeters: 0,
+        timeSeconds: 0,
+        totalDistanceMeters: 0,
+        totalTimeSeconds: 0,
+      });
+    }
+
+    return result;
+  }
+
   // Update driving/riding route
   useEffect(() => {
     const activeStart = (origin && origin.location) ? origin.location : currentLocation;
@@ -296,11 +392,13 @@ export function MapWrapper({
         (status: string, result: any) => {
           if (status === 'complete') {
             console.log('Driving route updated with waypoints:', result);
-            // Emit real route distance and time to parent
+            // Emit real route data
             if (onRouteUpdate && result.routes?.[0]) {
+              const route = result.routes[0];
               onRouteUpdate({
-                distanceMeters: result.routes[0].distance || 0,
-                timeSeconds: result.routes[0].time || 0,
+                distanceMeters: route.distance || 0,
+                timeSeconds: route.time || 0,
+                steps: parseAMapSteps(route, destination?.displayName),
               });
             }
           } else {
@@ -320,15 +418,18 @@ export function MapWrapper({
       ridingRouteRef.current.search(startPos, endPos, (status: string, result: any) => {
         if (status === 'complete') {
           console.log('Riding route updated', result);
-          // Emit real route distance and time to parent
+          // Emit real route data
           if (onRouteUpdate && result.routes?.[0]) {
+            const route = result.routes[0];
             onRouteUpdate({
-              distanceMeters: result.routes[0].distance || 0,
-              timeSeconds: result.routes[0].time || 0,
+              distanceMeters: route.distance || 0,
+              timeSeconds: route.time || 0,
+              steps: parseAMapSteps(route, destination?.displayName),
             });
           }
         } else {
           console.error('Riding route failed', result);
+        }
         }
       });
     }

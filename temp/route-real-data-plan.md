@@ -27,14 +27,16 @@ HUD / 导航卡片
 
 ### Phase 1: MapNavigation 传递完整路线数据
 
-- [ ] onRouteUpdate 改为传递完整路线对象（包含所有路段 steps）
-- [ ] 每个 step 包含：指令文本、距离、时间、坐标、动作类型
+- [x] onRouteUpdate 改为传递完整路线对象（包含所有路段 steps）
+- [x] 每个 step 包含：指令文本、距离、时间、坐标、动作类型
+- [x] parseAMapSteps 辅助函数：将高德 route steps 转为 RouteStep[]
 
 ### Phase 2: App.tsx 改用真实路线步骤
 
-- [ ] 存储完整路线步骤列表替代模拟数据
-- [ ] 导航只使用真实步骤推进，不再走 generateNavSteps
-- [ ] 移除硬编码的 5.0KM/12MIN 等常量
+- [ ] routeInfo 改为 RouteInfo 类型，含 steps
+- [ ] generateNavSteps -> useRouteSteps 基于真实 steps
+- [ ] 导航模拟只走真实步骤
+- [ ] HUD 显示真实距离/ETA
 
 ### Phase 3: HUD 显示真实运动数据
 

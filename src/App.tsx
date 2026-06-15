@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MapWrapper, globalPlacesSearch } from './components/MapNavigation';
+import { MapWrapper, globalPlacesSearch, RouteInfo } from './components/MapNavigation';
 import { PlaceModel, processVoiceCommand } from './services/gemini';
 import { speechService } from './services/speech';
 import { Mic, MicOff, Settings, Search, X, Navigation, MapPin, Battery, Clock, Timer, Activity, Volume2, Sliders, Heart, Flag, ArrowLeftRight, Lightbulb } from 'lucide-react';
@@ -14,16 +14,14 @@ export default function App() {
   // Navigation & Hud Simulation States
   const [isNavigating, setIsNavigating] = useState(false);
   const [navStepIndex, setNavStepIndex] = useState(0);
-  const [isAutoPlaying, setIsAutoPlaying] = useState(false); // Default false - real-time stepping
+  const [isAutoPlaying, setIsAutoPlaying] = useState(false);
   const [lastSpokenStepIndex, setLastSpokenStepIndex] = useState<number | null>(null);
   const [simulatedLocation, setSimulatedLocation] = useState<{lat: number, lng: number} | null>(null);
   const [simulatedSpeed, setSimulatedSpeed] = useState<number>(0);
-  const [simulatedETA, setSimulatedETA] = useState<number>(0); 
-  const [simulatedDistance, setSimulatedDistance] = useState<number>(0); 
   const [navElapsedSeconds, setNavElapsedSeconds] = useState(0);
   
-  // Real route data from AMap API (replaces hardcoded 5KM/12MIN)
-  const [routeInfo, setRouteInfo] = useState<{distanceMeters: number, timeSeconds: number} | null>(null);
+  // Real route data from AMap API — replaces all hardcoded simulation
+  const [routeInfo, setRouteInfo] = useState<RouteInfo | null>(null);
 
   useEffect(() => {
     let interval: NodeJS.Timeout | null = null;
@@ -290,9 +288,9 @@ export default function App() {
               </div>
             </div>
             <span className={`text-lg font-black block tracking-tighter ${textHex} font-mono mt-1 leading-none`}>
-              {simulatedDistance >= 1000 
-                ? `${(simulatedDistance / 1000).toFixed(1)} KM` 
-                : `${simulatedDistance} M`
+              {currentStep.distanceLeftMeters >= 1000 
+                ? `${(currentStep.distanceLeftMeters / 1000).toFixed(1)} KM` 
+                : `${currentStep.distanceLeftMeters} M`
               }
             </span>
             <span className="text-[7.5px] text-white/60 block max-w-[120px] truncate uppercase font-bold mt-1">
@@ -317,7 +315,7 @@ export default function App() {
                 <div className="flex flex-col items-center border-r border-white/5">
                   <span className="text-[7.5px] opacity-40 uppercase font-black tracking-wider text-white">SPD (km/h)</span>
                   <span className={`text-2xl font-black font-mono tracking-tighter mt-1 leading-none ${textHex}`}>
-                    {isAutoPlaying ? simulatedSpeed : (navStepIndex === 0 ? 0 : Math.round(22 + Math.cos(navElapsedSeconds / 10) * 3))}
+                    {isAutoPlaying ? currentStep.speed : (navStepIndex === 0 ? 0 : currentStep.speed)}
                   </span>
                 </div>
                 
@@ -550,6 +548,7 @@ export default function App() {
                       setIsNavigating(false);
                       setIsAutoPlaying(false);
                       setNavStepIndex(0);
+                      setRouteInfo(null);
                       speechService.speak("Spatial HUD mode ended.");
                     }}
                     className="px-2.5 py-1.5 border border-red-500/20 text-red-400 rounded-lg hover:bg-red-500 hover:text-white transition text-[9px] uppercase font-black cursor-pointer"
@@ -597,7 +596,22 @@ export default function App() {
   // Dynamic navigation simulation step generator
   const generateNavSteps = () => {
     if (!destination) return [];
-    
+
+    // When real route data is available, convert RouteStep[] to SimStep[]
+    if (routeInfo?.steps && routeInfo.steps.length > 0) {
+      return routeInfo.steps.map((step): SimStep => ({
+        text: step.text,
+        action: step.action,
+        location: step.location,
+        distanceLeftMeters: step.totalDistanceMeters,
+        etaLeftMinutes: Math.round(step.totalTimeSeconds / 60),
+        speed: step.distanceMeters > 0 && step.timeSeconds > 0
+          ? Math.round((step.distanceMeters / 1000) / (step.timeSeconds / 3600))
+          : 0,
+      }));
+    }
+
+    // Fallback: simulated steps (no real route data yet)
     const start = (origin && origin.location) ? origin.location : (currentLocation || { lat: 39.90872, lng: 116.39748 });
     const end = destination.location || { lat: 39.91125, lng: 116.41162 };
     
@@ -966,6 +980,7 @@ export default function App() {
                     <button 
                       onClick={() => {
                         setDestination(null);
+                        setRouteInfo(null);
                         setOrigin(null);
                         setWaypoints([]);
                         setManualOriginQuery("");
@@ -1231,7 +1246,7 @@ export default function App() {
                             <span className="font-bold text-[#00FF66]">已选终点:</span>
                             <span className="truncate max-w-[200px]">{destination.displayName}</span>
                             <button 
-                              onClick={e => { e.preventDefault(); setDestination(null); setManualSearchQuery(""); }}
+                              onClick={e => { e.preventDefault(); setDestination(null); setRouteInfo(null); setManualSearchQuery(""); }}
                               className="text-red-400 hover:underline cursor-pointer font-sans"
                             >
                               [清除]
@@ -1494,16 +1509,16 @@ export default function App() {
                 <div className="flex flex-col">
                   <span className="text-[9px] uppercase tracking-[0.1em] text-white/40 font-bold">Remaining Dist.</span>
                   <span className="text-xl font-mono font-black text-white mt-0.5">
-                    {simulatedDistance >= 1000 
-                      ? `${(simulatedDistance / 1000).toFixed(1)} KM` 
-                      : `${simulatedDistance} M`
+                    {currentStep.distanceLeftMeters >= 1000 
+                      ? `${(currentStep.distanceLeftMeters / 1000).toFixed(1)} KM` 
+                      : `${currentStep.distanceLeftMeters} M`
                     }
                   </span>
                 </div>
                 <div className="flex flex-col">
                   <span className="text-[9px] uppercase tracking-[0.1em] text-white/40 font-bold">ETA Countdown</span>
                   <span className="text-xl font-mono font-black text-[#EFFF33] mt-0.5">
-                    {simulatedETA} MIN
+                    {currentStep.etaLeftMinutes} MIN
                   </span>
                 </div>
               </div>
