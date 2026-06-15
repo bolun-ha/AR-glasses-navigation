@@ -251,13 +251,26 @@ export function MapWrapper({
     const startPos = new AMapRef.current.LngLat(activeStart.lng, activeStart.lat);
     const endPos = new AMapRef.current.LngLat(destination.location.lng, destination.location.lat);
     
-    // Automatically use driving if waypoints are set (since Riding doesn't support waypoints natively in key-route api)
-    const activeMode = waypoints.length > 0 ? 'driving' : routeMode;
+    // Use driving for route planning when waypoints are set or routeMode is 'driving'.
+    // When routeMode is 'riding', we still use AMap.Driving but with a bike-friendly policy
+    // (shortest distance + avoid highways) since AMap.Riding doesn't support waypoints.
+    const useDrivingApi = waypoints.length > 0 || routeMode === 'driving';
 
-    if (activeMode === 'driving') {
+    if (routeMode === 'riding') {
+      // Even in 'riding' mode, if we have waypoints we use Driving API with biking-friendly policy
+      if (drivingRouteRef.current) {
+        drivingRouteRef.current.clear();
+      }
+      if (!ridingRouteRef.current && !drivingRouteRef.current) return;
+    } else {
       if (ridingRouteRef.current) {
         ridingRouteRef.current.clear();
       }
+      if (!drivingRouteRef.current) return;
+    }
+
+    if (useDrivingApi || (routeMode === 'riding' && waypoints.length > 0)) {
+      // Use Driving API for all non-trivial routes
       if (!drivingRouteRef.current) return;
 
       const waypointPositions = waypoints
@@ -266,12 +279,19 @@ export function MapWrapper({
 
       console.log('Planning driving route with waypoints:', waypointPositions);
 
+      const drivingOptions: any = {
+        waypoints: waypointPositions,
+      };
+      // When in riding mode (with waypoints), use shortest-distance policy + no highways
+      // to simulate a bike-friendly route via the Driving API
+      if (routeMode === 'riding') {
+        drivingOptions.policy = 5; // AMap.DrivingPolicy.LEAST_DISTANCE — shortest path, no highways
+      }
+
       drivingRouteRef.current.search(
         startPos,
         endPos,
-        {
-          waypoints: waypointPositions
-        },
+        drivingOptions,
         (status: string, result: any) => {
           if (status === 'complete') {
             console.log('Driving route updated with waypoints:', result);
@@ -281,8 +301,9 @@ export function MapWrapper({
         }
       );
     } else {
-      if (drivingRouteRef.current) {
-        drivingRouteRef.current.clear();
+      // Pure riding mode, no waypoints — use native AMap.Riding
+      if (ridingRouteRef.current) {
+        ridingRouteRef.current.clear();
       }
       if (!ridingRouteRef.current) return;
 
@@ -324,12 +345,11 @@ export function MapWrapper({
           <button
             onClick={() => setRouteMode('riding')}
             className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all duration-200 ${
-              routeMode === 'riding' && waypoints.length === 0
+              routeMode === 'riding'
                 ? 'bg-[#EFFF33] text-black shadow-[0_0_15px_rgba(239,255,51,0.3)] font-black'
                 : 'text-white/60 hover:text-white hover:bg-white/5 font-bold'
-            } ${waypoints.length > 0 ? 'opacity-40 cursor-not-allowed' : ''}`}
-            disabled={waypoints.length > 0}
-            title={waypoints.length > 0 ? "Riding does not support stopovers" : "Riding route"}
+            }`}
+            title="骑行模式（有途经点时通过驾最短路径模拟）"
           >
             Riding
           </button>
