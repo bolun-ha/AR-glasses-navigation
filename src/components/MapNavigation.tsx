@@ -20,16 +20,20 @@ export let globalPlacesSearch: (query: string, location: {lat: number, lng: numb
 
 export function MapWrapper({ 
   currentLocation,
+  origin,
   destination,
   waypoints,
   searchResults,
-  simulatedLocation
+  simulatedLocation,
+  hideControls
 }: {
   currentLocation: {lat: number, lng: number} | null,
+  origin: PlaceModel | null,
   destination: PlaceModel | null,
   waypoints: PlaceModel[],
   searchResults: PlaceModel[],
-  simulatedLocation?: {lat: number, lng: number} | null
+  simulatedLocation?: {lat: number, lng: number} | null,
+  hideControls?: boolean
 }) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
@@ -237,13 +241,14 @@ export function MapWrapper({
 
   // Update driving/riding route
   useEffect(() => {
-    if (!mapRef.current || !currentLocation || !destination || !destination.location) {
+    const activeStart = (origin && origin.location) ? origin.location : currentLocation;
+    if (!mapRef.current || !activeStart || !destination || !destination.location) {
       if (drivingRouteRef.current) drivingRouteRef.current.clear();
       if (ridingRouteRef.current) ridingRouteRef.current.clear();
       return;
     }
 
-    const startPos = new AMapRef.current.LngLat(currentLocation.lng, currentLocation.lat);
+    const startPos = new AMapRef.current.LngLat(activeStart.lng, activeStart.lat);
     const endPos = new AMapRef.current.LngLat(destination.location.lng, destination.location.lat);
     
     // Automatically use driving if waypoints are set (since Riding doesn't support waypoints natively in key-route api)
@@ -291,7 +296,7 @@ export function MapWrapper({
         }
       });
     }
-  }, [currentLocation, destination, waypoints, routeMode]);
+  }, [currentLocation, origin, destination, waypoints, routeMode]);
 
   return (
     <div className="relative w-full h-full">
@@ -314,7 +319,7 @@ export function MapWrapper({
       )}
 
       {/* Route Mode Control Overlay */}
-      {destination && (
+      {destination && !hideControls && (
         <div className="absolute top-6 left-6 z-10 flex gap-2 bg-[#141414]/90 border border-white/10 p-1.5 rounded-2xl backdrop-blur-md shadow-2xl">
           <button
             onClick={() => setRouteMode('riding')}
