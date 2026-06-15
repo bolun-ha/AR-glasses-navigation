@@ -25,7 +25,8 @@ export function MapWrapper({
   waypoints,
   searchResults,
   simulatedLocation,
-  hideControls
+  hideControls,
+  onRouteUpdate
 }: {
   currentLocation: {lat: number, lng: number} | null,
   origin: PlaceModel | null,
@@ -34,6 +35,7 @@ export function MapWrapper({
   searchResults: PlaceModel[],
   simulatedLocation?: {lat: number, lng: number} | null,
   hideControls?: boolean
+  onRouteUpdate?: (info: {distanceMeters: number, timeSeconds: number}) => void
 }) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
@@ -110,48 +112,47 @@ export function MapWrapper({
         hideMarkers: false, // Let AMap draw start and end markers beautifully
       });
 
-      // Initialize place search plugin
+      // Initialize place search plugin (no auto markers — we draw our own)
       placeSearchRef.current = new AMap.PlaceSearch({
         pageSize: 5,
         pageIndex: 1,
         extensions: 'all'
       });
+      placeSearchRef.current.setLang('zh');
 
       // Wire up the global search function
       globalPlacesSearch = async (query: string, location: {lat: number, lng: number} | null) => {
         return new Promise((resolve) => {
           if (!placeSearchRef.current) return resolve([]);
           
+          const onComplete = (status: string, result: any) => {
+            // Remove auto-generated markers from PlaceSearch (white strips)
+            if (result?._instances) {
+              result._instances.forEach((markers: any) => {
+                if (markers instanceof AMap.Marker) {
+                  map.remove(markers);
+                }
+              });
+            }
+            if (status === 'complete' && result.info === 'OK') {
+              const items = result.poiList.pois.map((poi: any) => ({
+                id: poi.id,
+                displayName: poi.name,
+                address: poi.address,
+                location: { lat: poi.location.lat, lng: poi.location.lng },
+                distanceMeters: poi.distance,
+              }));
+              resolve(items);
+            } else {
+              return resolve([]);
+            }
+          };
+
           if (location) {
              placeSearchRef.current.setCity(map.getCity ? map.getCity() : '全国'); 
-             placeSearchRef.current.searchNearBy(query, [location.lng, location.lat], 50000, (status: string, result: any) => {
-                if (status === 'complete' && result.info === 'OK') {
-                  const items = result.poiList.pois.map((poi: any) => ({
-                    id: poi.id,
-                    displayName: poi.name,
-                    address: poi.address,
-                    location: { lat: poi.location.lat, lng: poi.location.lng },
-                    distanceMeters: poi.distance,
-                  }));
-                  resolve(items);
-                } else {
-                  return resolve([]);
-                }
-             });
+             placeSearchRef.current.searchNearBy(query, [location.lng, location.lat], 50000, onComplete);
           } else {
-            placeSearchRef.current.search(query, (status: string, result: any) => {
-              if (status === 'complete' && result.info === 'OK') {
-                const items = result.poiList.pois.map((poi: any) => ({
-                  id: poi.id,
-                  displayName: poi.name,
-                  address: poi.address,
-                  location: { lat: poi.location.lat, lng: poi.location.lng }
-                }));
-                resolve(items);
-              } else {
-                return resolve([]);
-              }
-            });
+            placeSearchRef.current.search(query, onComplete);
           }
         });
       };
@@ -295,6 +296,13 @@ export function MapWrapper({
         (status: string, result: any) => {
           if (status === 'complete') {
             console.log('Driving route updated with waypoints:', result);
+            // Emit real route distance and time to parent
+            if (onRouteUpdate && result.routes?.[0]) {
+              onRouteUpdate({
+                distanceMeters: result.routes[0].distance || 0,
+                timeSeconds: result.routes[0].time || 0,
+              });
+            }
           } else {
             console.error('Driving route failed', result);
           }
@@ -312,6 +320,13 @@ export function MapWrapper({
       ridingRouteRef.current.search(startPos, endPos, (status: string, result: any) => {
         if (status === 'complete') {
           console.log('Riding route updated', result);
+          // Emit real route distance and time to parent
+          if (onRouteUpdate && result.routes?.[0]) {
+            onRouteUpdate({
+              distanceMeters: result.routes[0].distance || 0,
+              timeSeconds: result.routes[0].time || 0,
+            });
+          }
         } else {
           console.error('Riding route failed', result);
         }

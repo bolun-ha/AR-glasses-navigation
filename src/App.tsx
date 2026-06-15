@@ -21,6 +21,9 @@ export default function App() {
   const [simulatedETA, setSimulatedETA] = useState<number>(0); 
   const [simulatedDistance, setSimulatedDistance] = useState<number>(0); 
   const [navElapsedSeconds, setNavElapsedSeconds] = useState(0);
+  
+  // Real route data from AMap API (replaces hardcoded 5KM/12MIN)
+  const [routeInfo, setRouteInfo] = useState<{distanceMeters: number, timeSeconds: number} | null>(null);
 
   useEffect(() => {
     let interval: NodeJS.Timeout | null = null;
@@ -610,12 +613,14 @@ export default function App() {
     const steps: SimStep[] = [];
     
     // Step 0: Start
+    const totalDistKm = routeInfo ? (routeInfo.distanceMeters / 1000).toFixed(1) : "5.0";
+    const totalTimeMin = routeInfo ? Math.round(routeInfo.timeSeconds / 60) : 12;
     steps.push({
-      text: `准备出发。起点：${origin ? origin.displayName : "当前位置"}，终点：${destination.displayName}。全程预计行驶5公里，大约需要12分钟。请沿当前道路向前行驶。`,
+      text: `准备出发。起点：${origin ? origin.displayName : "当前位置"}，终点：${destination.displayName}。全程预计行驶${totalDistKm}公里，大约需要${totalTimeMin}分钟。请沿当前道路向前行驶。`,
       action: 'start',
       location: start,
-      distanceLeftMeters: 5000,
-      etaLeftMinutes: 12,
+      distanceLeftMeters: routeInfo?.distanceMeters || 5000,
+      etaLeftMinutes: totalTimeMin,
       speed: 0
     });
 
@@ -1274,6 +1279,7 @@ export default function App() {
              waypoints={waypoints}
              searchResults={searchResults}
              simulatedLocation={simulatedLocation} hideControls={isARGlassMode}
+             onRouteUpdate={(info) => setRouteInfo(info)}
            />
         </div>
 
@@ -1384,11 +1390,23 @@ export default function App() {
             <div className="grid grid-cols-2 gap-4 border-y border-white/10 py-3.5">
               <div className="flex flex-col">
                 <span className="text-[9px] uppercase tracking-[0.1em] text-white/40 font-bold">Total Distance</span>
-                <span className="text-base font-mono font-bold text-white uppercase">{waypoints.length > 0 ? `${(5.0 + waypoints.length * 1.5).toFixed(1)} KM` : "5.0 KM"}</span>
+                <span className="text-base font-mono font-bold text-white uppercase">
+                  {routeInfo
+                    ? `${(routeInfo.distanceMeters / 1000).toFixed(1)} KM`
+                    : waypoints.length > 0
+                      ? `${(5.0 + waypoints.length * 1.5).toFixed(1)} KM`
+                      : "5.0 KM"}
+                </span>
               </div>
               <div className="flex flex-col">
                 <span className="text-[9px] uppercase tracking-[0.1em] text-white/40 font-bold">Estimated Time</span>
-                <span className="text-base font-mono font-bold text-white uppercase">{waypoints.length > 0 ? `${12 + waypoints.length * 4} MIN` : "12 MIN"}</span>
+                <span className="text-base font-mono font-bold text-white uppercase">
+                  {routeInfo
+                    ? `${Math.round(routeInfo.timeSeconds / 60)} MIN`
+                    : waypoints.length > 0
+                      ? `${12 + waypoints.length * 4} MIN`
+                      : "12 MIN"}
+                </span>
               </div>
             </div>
             
