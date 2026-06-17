@@ -275,7 +275,7 @@ export default function App() {
 
         {/* TOP SECTION: Status Bar + Turn Indicator */}
         <div className="flex flex-col gap-1 shrink-0 select-none z-20">
-          <div className="relative flex items-center px-2 py-0 border border-white/10 rounded-[6px] bg-black/60 backdrop-blur-md">
+          <div className="relative flex items-center px-2 py-0 rounded-[6px] bg-black/60 backdrop-blur-md">
             <div className="flex items-center gap-1.5 flex-1">
               <span className={`text-[5px] font-black tracking-widest ${textHex} flex items-center gap-0.5`}>
                 <Battery size={6} className="stroke-[2.5]" /> <span>85%</span>
@@ -299,7 +299,7 @@ export default function App() {
 
         {/* Turn Indicator — 状态栏右下，右边对齐 */}
         {currentStep && (
-          <div className="absolute top-[2.8rem] right-6 p-2 rounded-xl bg-black/60 border border-white/10 backdrop-blur-md select-none pointer-events-none z-20 shadow-[0_4px_12px_rgba(0,0,0,0.5)]">
+          <div className="absolute top-[2.8rem] right-6 p-2 rounded-xl bg-black/60 backdrop-blur-md select-none pointer-events-none z-20 shadow-[0_4px_12px_rgba(0,0,0,0.5)]">
             <div className="flex items-center gap-2 justify-end">
               <span className="text-[6px] text-white/40 font-bold uppercase tracking-wider">NEXT TURN</span>
               <div className={`p-1 rounded-full bg-white/5 border border-white/15 ${textHex}`}>
@@ -330,42 +330,42 @@ export default function App() {
 
         {/* BOTTOM SECTION: Dashboard + Speech + Mic + Controls */}
         <div className="flex flex-col gap-1.5 shrink-0 select-none z-20">
-          {currentStep ? (
-            <>
-              {/* Core Dashboard Row (4-column grid) */}
-              <div className="grid grid-cols-4 gap-1.5 py-1 px-1 bg-[#000000]/50 rounded-xl shadow-[0_4px_12px_rgba(0,0,0,0.4)]">
-                <div className="flex flex-col items-center border-r border-white/10">
-                  <span className="text-[4px] opacity-40 uppercase font-black tracking-wider text-white">SPD (km/h)</span>
-                  <span className={`text-xs font-black font-mono tracking-tighter mt-0.5 leading-none ${textHex}`}>
-                    {smoothedSpeed > 0
-                      ? Math.round(smoothedSpeed * 3.6)
-                      : (isAutoPlaying ? currentStep.speed : (navStepIndex === 0 ? 0 : currentStep.speed))}
-                  </span>
-                </div>
-                <div className="flex flex-col items-center border-r border-white/10">
-                  <span className="text-[4px] opacity-40 uppercase font-black tracking-wider text-white">GRAD (%)</span>
-                  <span className={`text-xs font-black font-mono tracking-tighter mt-0.5 leading-none ${textHex}`}>
-                    {navStepIndex === 0 ? '0' : (navStepIndex % 2 === 0 ? `+${(3 + Math.sin(navElapsedSeconds / 6) * 1.5).toFixed(0)}` : `-${(1 + Math.cos(navElapsedSeconds / 4) * 0.5).toFixed(0)}`)}%
-                  </span>
-                </div>
-                <div className="flex flex-col items-center border-r border-white/10">
-                  <span className="text-[4px] opacity-40 uppercase font-black tracking-wider text-white">CAD (rpm)</span>
-                  <span className={`text-xs font-black font-mono tracking-tighter mt-0.5 leading-none ${textHex}`}>
-                    {navStepIndex === 0 ? '0' : Math.round(82 + Math.sin(navElapsedSeconds / 5) * 4)}
-                  </span>
-                </div>
-                <div className="flex flex-col items-center">
-                  <span className="text-[4px] opacity-40 uppercase font-black tracking-wider text-white flex items-center gap-1">
-                    HR <Heart size={4} className="fill-red-500 stroke-red-500 animate-pulse" />
-                  </span>
-                  <span className="text-xs font-black font-mono tracking-tighter mt-0.5 leading-none text-white">
-                    {navStepIndex === 0 ? '72' : Math.round(124 + Math.sin(navElapsedSeconds / 12) * 5)}
-                  </span>
-                </div>
-              </div>
+          {/* Core Dashboard Row (4-column grid) — always visible when AR is active */}
+          <div className="grid grid-cols-4 gap-1.5 py-1 px-1 bg-[#000000]/50 rounded-xl shadow-[0_4px_12px_rgba(0,0,0,0.4)]">
+            <div className="flex flex-col items-center border-r border-white/10">
+              <span className="text-[4px] opacity-40 uppercase font-black tracking-wider text-white">SPD (km/h)</span>
+              <span className={`text-xs font-black font-mono tracking-tighter mt-0.5 leading-none ${textHex}`}>
+                {smoothedSpeed > 0
+                  ? Math.round(smoothedSpeed * 3.6)
+                  : (isAutoPlaying ? currentStep?.speed : (navStepIndex === 0 ? 0 : currentStep?.speed))}
+              </span>
+            </div>
+            <div className="flex flex-col items-center border-r border-white/10">
+              <span className="text-[4px] opacity-40 uppercase font-black tracking-wider text-white">GRAD (%)</span>
+              <span className={`text-xs font-black font-mono tracking-tighter mt-0.5 leading-none ${textHex}`}>
+                {navStepIndex === 0 ? '0' : (navStepIndex % 2 === 0 ? `+${(3 + Math.sin(navElapsedSeconds / 6) * 1.5).toFixed(0)}` : `-${(1 + Math.cos(navElapsedSeconds / 4) * 0.5).toFixed(0)}`)}%
+              </span>
+            </div>
+            <div className="flex flex-col items-center border-r border-white/10">
+              <span className="text-[4px] opacity-40 uppercase font-black tracking-wider text-white">CAD (rpm)</span>
+              <span className={`text-xs font-black font-mono tracking-tighter mt-0.5 leading-none ${textHex}`}>
+                {navStepIndex === 0 ? '0' : Math.round(82 + Math.sin(navElapsedSeconds / 5) * 4)}
+              </span>
+            </div>
+            <div className="flex flex-col items-center">
+              <span className="text-[4px] opacity-40 uppercase font-black tracking-wider text-white flex items-center gap-1">
+                HR <Heart size={4} className="fill-red-500 stroke-red-500 animate-pulse" />
+              </span>
+              <span className="text-xs font-black font-mono tracking-tighter mt-0.5 leading-none text-white">
+                {navStepIndex === 0 ? '72' : Math.round(124 + Math.sin(navElapsedSeconds / 12) * 5)}
+              </span>
+            </div>
+          </div>
 
+          {currentStep ? (
+            <>              
               {/* Speech Guidance Box */}
-              <div className="p-2 rounded-xl bg-black/60 border border-white/5 backdrop-blur-md shadow-[0_4px_12px_rgba(0,0,0,0.5)]">
+              <div className="p-2 rounded-xl bg-black/60 backdrop-blur-md shadow-[0_4px_12px_rgba(0,0,0,0.5)]">
                 <div className="flex justify-between items-center mb-0.5">
                   <span className={`text-[6px] font-black uppercase tracking-[0.15em] ${textHex} flex items-center gap-1`}>
                     <Volume2 size={8} className="stroke-[2.5]" /> HUD Speech Guidance

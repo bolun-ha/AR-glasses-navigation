@@ -528,6 +528,14 @@ export function MapWrapper({
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, [hideControls]);
 
+  // When in AR thumbnail mode with no route, center on current location
+  useEffect(() => {
+    if (!mapRef.current || !hideControls || destination || !currentLocation) return;
+    mapRef.current.resize();
+    mapRef.current.setCenter([currentLocation.lng, currentLocation.lat]);
+    mapRef.current.setZoom(15);
+  }, [hideControls, currentLocation, destination]);
+
   // Listen for zoom/fitRoute events from voice commands
   useEffect(() => {
     const handleZoom = (e: Event) => {
