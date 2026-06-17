@@ -8,7 +8,7 @@ export default defineConfig(({mode}) => {
   return {
     plugins: [react(), tailwindcss()],
     define: {
-      'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
+      'process.env.DASHSCOPE_API_KEY': JSON.stringify(env.DASHSCOPE_API_KEY || ''),
       'process.env.AMAP_KEY': JSON.stringify(env.AMAP_KEY || ''),
       'process.env.AMAP_SECURITY_CODE': JSON.stringify(env.AMAP_SECURITY_CODE || ''),
     },

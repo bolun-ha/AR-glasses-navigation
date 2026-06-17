@@ -528,6 +528,42 @@ export function MapWrapper({
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, [hideControls]);
 
+  // Listen for zoom/fitRoute events from voice commands
+  useEffect(() => {
+    const handleZoom = (e: Event) => {
+      const direction = (e as CustomEvent).detail;
+      if (!mapRef.current) return;
+      const z = mapRef.current.getZoom() || 13;
+      mapRef.current.setZoom(direction === 'in' ? z + 1 : z - 1);
+    };
+    const handleFitRoute = () => {
+      if (!mapRef.current) return;
+      mapRef.current.resize();
+      mapRef.current.setFitView(null, false, [40, 40, 40, 40]);
+    };
+    window.addEventListener('map-zoom', handleZoom);
+    window.addEventListener('map-fit-route', handleFitRoute);
+    return () => {
+      window.removeEventListener('map-zoom', handleZoom);
+      window.removeEventListener('map-fit-route', handleFitRoute);
+    };
+  }, []);
+
+  // Listen for routeMode override from voice commands (set via window.__routeModeOverride)
+  useEffect(() => {
+    const checkOverride = () => {
+      const override = (window as any).__routeModeOverride;
+      if (override && override !== routeMode) {
+        setRouteMode(override);
+        (window as any).__routeModeOverride = null;
+      }
+    };
+    checkOverride();
+    // Poll for override changes — App.tsx sets it before triggering rerouteTrigger
+    const interval = setInterval(checkOverride, 200);
+    return () => clearInterval(interval);
+  }, [routeMode, rerouteTrigger]);
+
   return (
     <div className="relative w-full h-full">
       {mapError && (

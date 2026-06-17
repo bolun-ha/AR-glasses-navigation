@@ -16,6 +16,7 @@ export default function App() {
   const [destination, setDestination] = useState<PlaceModel | null>(null);
   const [waypoints, setWaypoints] = useState<PlaceModel[]>([]);
   const [searchResults, setSearchResults] = useState<PlaceModel[]>([]);
+  const isProcessingRef = useRef(false);
   const searchResultsRef = useRef<PlaceModel[]>([]);
   
   // Navigation & Hud Simulation States
@@ -733,7 +734,8 @@ export default function App() {
   }, [currentLocation, isNavigating, routeInfo]);
 
   const executeCommand = async (text: string) => {
-    if (!text.trim()) return;
+    if (!text.trim() || isProcessingRef.current) return;
+    isProcessingRef.current = true;
     setSystemMessage(`Processing: "${text}"...`);
     try {
     const voiceCmd = text.toLowerCase();
@@ -855,13 +857,41 @@ export default function App() {
           setSearchResults([]);
           searchResultsRef.current = [];
         },
-        onSelectOption: () => {}
+        onSelectOption: () => {},
+        onReroute: () => {
+          setRerouteTrigger(prev => prev + 1);
+        },
+        onSetRouteMode: (mode) => {
+          // MapNavigation has its own routeMode state; we need to pass this down
+          // For now, store in a ref that the MapWrapper can read
+          (window as any).__routeModeOverride = mode;
+          setRerouteTrigger(prev => prev + 1);
+          handleSpeak(`已切换为${mode === 'driving' ? '驾车' : '骑行'}模式，路线已重新规划。`);
+        },
+        onZoom: (direction) => {
+          // The map is inside MapWrapper; we'll handle via a window event for simplicity
+          window.dispatchEvent(new CustomEvent('map-zoom', { detail: direction }));
+        },
+        onGetRouteSummary: () => {
+          if (!routeInfo) return null;
+          const distKm = (routeInfo.distanceMeters / 1000).toFixed(1);
+          const timeMin = Math.round(routeInfo.timeSeconds / 60);
+          // Estimate ETA from now
+          const etaDate = new Date(Date.now() + routeInfo.timeSeconds * 1000);
+          const etaStr = etaDate.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+          return { distanceKm: distKm, timeMin, eta: etaStr };
+        },
+        onFitRoute: () => {
+          window.dispatchEvent(new CustomEvent('map-fit-route'));
+        },
       },
       handleSpeak
     );
   } catch (err: any) {
     console.error("executeCommand error:", err);
     setSystemMessage(err.message || "Gemini API 调用失败，检查网络或 API Key");
+  } finally {
+    isProcessingRef.current = false;
   }
   };
 
@@ -888,14 +918,20 @@ export default function App() {
           return;
         }
         
-        setSystemMessage("🎤 请说话...");
-        const text = await speechService.listen();
-        setIsListening(false);
-        setSystemMessage(`识别结果: "${text}"`);
-        setInputText(text);
-        executeCommand(text);
+        setSystemMessage("🎤 监听中，请说话... （再次点击可停止）");
+
+        // Start continuous listening — each complete utterance triggers executeCommand
+        speechService.startContinuous(
+          (text) => {
+            setSystemMessage(`🎤 "${text}"`);
+            executeCommand(text);
+          },
+          (error) => {
+            setSystemMessage(error);
+          }
+        );
       } else {
-        speechService.stopListening();
+        speechService.stopContinuous();
         setIsListening(false);
         setSystemMessage("已停止语音识别");
       }

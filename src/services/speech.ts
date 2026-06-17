@@ -80,6 +80,81 @@ export class SpeechService {
     }
   }
 
+  private _onTranscript?: (text: string) => void;
+  private _onError?: (error: string) => void;
+  private _continuousMode: boolean = false;
+
+  /** Start listening. In continuous mode, transcripts are delivered via callback.
+   *  In single-shot mode (default), returns a Promise. */
+  startContinuous(onTranscript: (text: string) => void, onError: (error: string) => void) {
+    this._onTranscript = onTranscript;
+    this._onError = onError;
+    this._continuousMode = true;
+
+    if (!this.recognition) {
+      onError("Speech recognition not supported");
+      return;
+    }
+
+    this.recognition.continuous = true;
+    this.recognition.interimResults = false;
+
+    this.recognition.onresult = (event: any) => {
+      // Only process final results (isFinal === true)
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i];
+        if (result.isFinal) {
+          const transcript = result[0].transcript.trim();
+          if (transcript && this._onTranscript) {
+            this._onTranscript(transcript);
+          }
+        }
+      }
+    };
+
+    this.recognition.onerror = (event: any) => {
+      if (event.error === 'no-speech') return; // Ignore silence in continuous mode
+      if (this._onError) {
+        this._onError(event.error === 'not-allowed' ? '麦克风权限被拒绝' : `语音识别错误: ${event.error}`);
+      }
+    };
+
+    this.recognition.onend = () => {
+      // Automatically restart if still in continuous mode
+      if (this._continuousMode && this.recognition) {
+        try {
+          this.recognition.start();
+        } catch (e) {
+          // Ignore restart errors
+        }
+      }
+    };
+
+    try {
+      this.recognition.start();
+    } catch (e) {
+      if (this._onError) this._onError('启动语音识别失败');
+    }
+  }
+
+  stopContinuous() {
+    this._continuousMode = false;
+    this._onTranscript = undefined;
+    this._onError = undefined;
+    if (this.recognition) {
+      this.recognition.continuous = false;
+      this.recognition.interimResults = false;
+      this.recognition.onresult = null;
+      this.recognition.onerror = null;
+      this.recognition.onend = null;
+      try {
+        this.recognition.stop();
+      } catch (e) {
+        // ignore
+      }
+    }
+  }
+
   listen(): Promise<string> {
     return new Promise((resolve, reject) => {
       if (!this.recognition) {
@@ -88,6 +163,9 @@ export class SpeechService {
       }
       
       let resolved = false;
+
+      this.recognition.continuous = false;
+      this.recognition.interimResults = false;
 
       this.recognition.onresult = (event: any) => {
         if (event.results.length > 0 && event.results[0].length > 0) {
@@ -123,13 +201,7 @@ export class SpeechService {
   }
 
   stopListening() {
-    if (this.recognition) {
-      try {
-        this.recognition.stop();
-      } catch (e) {
-        // ignore
-      }
-    }
+    this.stopContinuous();
   }
 }
 
