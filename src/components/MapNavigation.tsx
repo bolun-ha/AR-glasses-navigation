@@ -2,6 +2,23 @@ import { useEffect, useRef, useState } from 'react';
 import AMapLoader from '@amap/amap-jsapi-loader';
 import { PlaceModel } from '../services/gemini';
 
+// Route step data type — maps 1:1 to AMap route step segments
+export interface RouteStep {
+  text: string;           // Navigation instruction text
+  action: 'start' | 'straight' | 'left' | 'right' | 'waypoint' | 'arrive';
+  location: { lat: number; lng: number };
+  distanceMeters: number; // Distance of this step segment
+  timeSeconds: number;    // Time of this step segment
+  totalDistanceMeters: number; // Cumulative remaining distance to destination
+  totalTimeSeconds: number;    // Cumulative remaining time to destination
+}
+
+export interface RouteInfo {
+  distanceMeters: number;
+  timeSeconds: number;
+  steps: RouteStep[];
+}
+
 const AMAP_KEY =
   process.env.AMAP_KEY ||
   (import.meta as any).env?.VITE_AMAP_KEY ||
@@ -25,7 +42,9 @@ export function MapWrapper({
   waypoints,
   searchResults,
   simulatedLocation,
-  hideControls
+  hideControls,
+  onRouteUpdate,
+  rerouteTrigger
 }: {
   currentLocation: {lat: number, lng: number} | null,
   origin: PlaceModel | null,
@@ -34,6 +53,8 @@ export function MapWrapper({
   searchResults: PlaceModel[],
   simulatedLocation?: {lat: number, lng: number} | null,
   hideControls?: boolean
+  onRouteUpdate?: (info: RouteInfo) => void
+  rerouteTrigger?: number
 }) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
@@ -90,10 +111,11 @@ export function MapWrapper({
       AMapRef.current = AMap;
       
       const map = new AMap.Map(mapContainerRef.current, {
-        viewMode: '3D', // Use 3D view
+        viewMode: '2D', // Use 2D view for tiny AR map
         zoom: 13, // Initialization zoom level
         center: [116.397428, 39.90923], // Initial center (Beijing)
         mapStyle: 'amap://styles/darkblue', // Setup dark mode theme
+        logo: false, // Hide AMap logo in AR mode
       });
       
       mapRef.current = map;
@@ -110,48 +132,73 @@ export function MapWrapper({
         hideMarkers: false, // Let AMap draw start and end markers beautifully
       });
 
-      // Initialize place search plugin
+      // Initialize place search plugin (no auto markers — we draw our own)
       placeSearchRef.current = new AMap.PlaceSearch({
         pageSize: 5,
         pageIndex: 1,
         extensions: 'all'
       });
+      placeSearchRef.current.setLang('zh');
 
       // Wire up the global search function
       globalPlacesSearch = async (query: string, location: {lat: number, lng: number} | null) => {
         return new Promise((resolve) => {
           if (!placeSearchRef.current) return resolve([]);
           
+          const onComplete = (status: string, result: any) => {
+            // Remove auto-generated markers from PlaceSearch (white strips)
+            if (result?._instances) {
+              result._instances.forEach((markers: any) => {
+                if (markers instanceof AMap.Marker) {
+                  map.remove(markers);
+                }
+              });
+            }
+            // Also check for other AMap auto-generated overlays
+            // Some AMap versions put markers in result.poiList.pois[i]._marker
+            if (result?.poiList?.pois) {
+              result.poiList.pois.forEach((poi: any) => {
+                if (poi._marker && poi._marker instanceof AMap.Marker) {
+                  map.remove(poi._marker);
+                  delete poi._marker;
+                }
+              });
+            }
+            if (status === 'complete' && result.info === 'OK') {
+              const items = result.poiList.pois.map((poi: any) => ({
+                id: poi.id,
+                displayName: poi.name,
+                address: poi.address,
+                location: { lat: poi.location.lat, lng: poi.location.lng },
+                distanceMeters: poi.distance,
+              }));
+              // Aggressive cleanup: remove AMap auto-markers after search
+              setTimeout(() => {
+                if (!mapRef.current || !AMapRef.current) return;
+                const allOverlays = (mapRef.current as any).getAllOverlays && (mapRef.current as any).getAllOverlays('marker');
+                if (allOverlays && Array.isArray(allOverlays)) {
+                  // Only remove markers that are text-only labels (AMap auto-generated search markers)
+                  allOverlays.forEach((m: any) => {
+                    if (m instanceof AMapRef.current.Marker) {
+                      const content = m.getContent && m.getContent();
+                      if (content && typeof content === 'string' && content.includes('<div')) {
+                        mapRef.current!.remove(m);
+                      }
+                    }
+                  });
+                }
+              }, 200);
+              resolve(items);
+            } else {
+              return resolve([]);
+            }
+          };
+
           if (location) {
              placeSearchRef.current.setCity(map.getCity ? map.getCity() : '全国'); 
-             placeSearchRef.current.searchNearBy(query, [location.lng, location.lat], 50000, (status: string, result: any) => {
-                if (status === 'complete' && result.info === 'OK') {
-                  const items = result.poiList.pois.map((poi: any) => ({
-                    id: poi.id,
-                    displayName: poi.name,
-                    address: poi.address,
-                    location: { lat: poi.location.lat, lng: poi.location.lng },
-                    distanceMeters: poi.distance,
-                  }));
-                  resolve(items);
-                } else {
-                  return resolve([]);
-                }
-             });
+             placeSearchRef.current.searchNearBy(query, [location.lng, location.lat], 50000, onComplete);
           } else {
-            placeSearchRef.current.search(query, (status: string, result: any) => {
-              if (status === 'complete' && result.info === 'OK') {
-                const items = result.poiList.pois.map((poi: any) => ({
-                  id: poi.id,
-                  displayName: poi.name,
-                  address: poi.address,
-                  location: { lat: poi.location.lat, lng: poi.location.lng }
-                }));
-                resolve(items);
-              } else {
-                return resolve([]);
-              }
-            });
+            placeSearchRef.current.search(query, onComplete);
           }
         });
       };
@@ -239,6 +286,160 @@ export function MapWrapper({
 
   }, [searchResults]);
 
+  // Helper: convert AMap route steps into our RouteStep[] format
+  // Splits long segments into finer-grained sub-steps (~200m each) for smoother navigation
+  function parseAMapSteps(route: any, destinationName?: string): RouteStep[] {
+    if (!route?.steps) return [];
+    const result: RouteStep[] = [];
+    let totalDist = route.distance || 0;
+    let totalTime = route.time || 0;
+    let cumDist = totalDist;
+    let cumTime = totalTime;
+
+    // Helper: determine action type from instruction text
+    const detectAction = (instruction: string, isLast: boolean): RouteStep['action'] => {
+      if (isLast) return 'arrive';
+      const lower = instruction.toLowerCase();
+      if (lower.includes('左') || lower.includes('左转') || lower.includes('向左')) return 'left';
+      if (lower.includes('右') || lower.includes('右转') || lower.includes('向右') || lower.includes('右拐')) return 'right';
+      if (lower.includes('直')) return 'straight';
+      return 'straight';
+    };
+
+    // Calculate cumulative distance along a path of LngLat-like points
+    const pathDistance = (path: any[]): number => {
+      let d = 0;
+      for (let i = 1; i < path.length; i++) {
+        const p0 = path[i - 1], p1 = path[i];
+        // Approximate: 1 degree lat ≈ 111km, 1 degree lng ≈ 111*cos(lat) km
+        if (p0 && p1) {
+          const lat = (p0.lat + p1.lat) / 2 * Math.PI / 180;
+          const dx = (p1.lng - p0.lng) * 111320 * Math.cos(lat);
+          const dy = (p1.lat - p0.lat) * 111320;
+          d += Math.sqrt(dx * dx + dy * dy);
+        }
+      }
+      return d;
+    };
+
+    // Helper: interpolate point at fraction t (0-1) along a path
+    const interpolatePath = (path: any[], t: number): { lat: number; lng: number } => {
+      if (!path.length) return { lat: 0, lng: 0 };
+      if (path.length === 1) return { lat: path[0].lat, lng: path[0].lng };
+      
+      // Compute cumulative distances
+      const dists: number[] = [0];
+      for (let i = 1; i < path.length; i++) {
+        const p0 = path[i - 1], p1 = path[i];
+        const lat = (p0.lat + p1.lat) / 2 * Math.PI / 180;
+        const dx = (p1.lng - p0.lng) * 111320 * Math.cos(lat);
+        const dy = (p1.lat - p0.lat) * 111320;
+        dists.push(dists[i - 1] + Math.sqrt(dx * dx + dy * dy));
+      }
+      const total = dists[dists.length - 1];
+      if (total === 0) return { lat: path[0].lat, lng: path[0].lng };
+      
+      const target = t * total;
+      for (let i = 1; i < dists.length; i++) {
+        if (target <= dists[i]) {
+          const frac = (target - dists[i - 1]) / (dists[i] - dists[i - 1]);
+          return {
+            lat: path[i - 1].lat + (path[i].lat - path[i - 1].lat) * frac,
+            lng: path[i - 1].lng + (path[i].lng - path[i - 1].lng) * frac,
+          };
+        }
+      }
+      return { lat: path[path.length - 1].lat, lng: path[path.length - 1].lng };
+    };
+
+    // Add start step
+    result.push({
+      text: `准备出发。全程预计行驶${(totalDist / 1000).toFixed(1)}公里，大约需要${Math.round(totalTime / 60)}分钟。`,
+      action: 'start',
+      location: { lat: route.steps[0].start_location.lat, lng: route.steps[0].start_location.lng },
+      distanceMeters: totalDist,
+      timeSeconds: totalTime,
+      totalDistanceMeters: totalDist,
+      totalTimeSeconds: totalTime,
+    });
+
+    const TARGET_SEGMENT_METERS = 200; // Split into segments of ~200m
+    const TARGET_SEGMENT_SECONDS = 15;   // Or ~15 seconds, whichever is smaller
+
+    for (let i = 0; i < route.steps.length; i++) {
+      const step = route.steps[i];
+      const isLast = i === route.steps.length - 1;
+      const stepDist = step.distance || 0;
+      const stepTime = step.time || 0;
+      const path = step.path || [];
+      const cleanText = step.instruction?.replace(/<[^>]*>/g, '') || '';
+      const action = detectAction(cleanText, isLast);
+
+      // Determine how many sub-segments to split into
+      const numSub = Math.max(1, Math.ceil(Math.min(
+        stepDist / TARGET_SEGMENT_METERS,
+        stepTime / TARGET_SEGMENT_SECONDS
+      )));
+
+      const subDist = stepDist / numSub;
+      const subTime = stepTime / numSub;
+
+      for (let s = 0; s < numSub; s++) {
+        const t0 = s / numSub;
+        const t1 = (s + 1) / numSub;
+        const startPoint = interpolatePath(path, t0);
+        const endPoint = interpolatePath(path, t1);
+        // Use the end point (closest to actual road) instead of midpoint for better GPS matching
+        const subLocation = endPoint;
+
+        cumDist -= subDist;
+        if (cumDist < 0) cumDist = 0;
+        cumTime -= subTime;
+        if (cumTime < 0) cumTime = 0;
+
+        // For sub-segments, build a more natural instruction
+        let subText = cleanText;
+        if (numSub > 1) {
+          if (s === 0) {
+            subText = `${cleanText}（第1段，约${Math.round(subDist)}米后）`;
+          } else if (s === numSub - 1) {
+            subText = `${cleanText}（最后一段）`;
+          } else {
+            subText = `继续行驶${Math.round(subDist)}米`;
+          }
+        }
+
+        result.push({
+          text: subText,
+          action: s === numSub - 1 ? action : 'straight',
+          location: subLocation,
+          distanceMeters: Math.round(subDist),
+          timeSeconds: Math.round(subTime),
+          totalDistanceMeters: Math.max(cumDist, 0),
+          totalTimeSeconds: Math.max(cumTime, 0),
+        });
+      }
+    }
+
+    // Add explicit arrival step
+    const lastStep = route.steps[route.steps.length - 1];
+    if (lastStep) {
+      const endPath = lastStep.path || [];
+      const endLoc = endPath[endPath.length - 1] || { lat: 0, lng: 0 };
+      result.push({
+        text: `您已到达${destinationName || '目的地'}附近。本次导航服务已全部完成。`,
+        action: 'arrive',
+        location: { lat: endLoc.lat, lng: endLoc.lng },
+        distanceMeters: 0,
+        timeSeconds: 0,
+        totalDistanceMeters: 0,
+        totalTimeSeconds: 0,
+      });
+    }
+
+    return result;
+  }
+
   // Update driving/riding route
   useEffect(() => {
     const activeStart = (origin && origin.location) ? origin.location : currentLocation;
@@ -251,52 +452,81 @@ export function MapWrapper({
     const startPos = new AMapRef.current.LngLat(activeStart.lng, activeStart.lat);
     const endPos = new AMapRef.current.LngLat(destination.location.lng, destination.location.lat);
     
-    // Automatically use driving if waypoints are set (since Riding doesn't support waypoints natively in key-route api)
-    const activeMode = waypoints.length > 0 ? 'driving' : routeMode;
+    // Always use Driving API for route planning (with policy=5 for riding mode).
+    // AMap.Riding is unreliable (not available on all key tiers) and doesn't support waypoints.
+    if (drivingRouteRef.current) drivingRouteRef.current.clear();
+    if (ridingRouteRef.current) ridingRouteRef.current.clear();
 
-    if (activeMode === 'driving') {
-      if (ridingRouteRef.current) {
-        ridingRouteRef.current.clear();
-      }
-      if (!drivingRouteRef.current) return;
-
-      const waypointPositions = waypoints
-        .filter(wp => wp && wp.location)
-        .map(wp => new AMapRef.current.LngLat(wp.location!.lng, wp.location!.lat));
-
-      console.log('Planning driving route with waypoints:', waypointPositions);
-
-      drivingRouteRef.current.search(
-        startPos,
-        endPos,
-        {
-          waypoints: waypointPositions
-        },
-        (status: string, result: any) => {
-          if (status === 'complete') {
-            console.log('Driving route updated with waypoints:', result);
-          } else {
-            console.error('Driving route failed', result);
-          }
-        }
-      );
-    } else {
-      if (drivingRouteRef.current) {
-        drivingRouteRef.current.clear();
-      }
-      if (!ridingRouteRef.current) return;
-
-      console.log('Planning riding route');
-
-      ridingRouteRef.current.search(startPos, endPos, (status: string, result: any) => {
-        if (status === 'complete') {
-          console.log('Riding route updated', result);
-        } else {
-          console.error('Riding route failed', result);
-        }
-      });
+    // Always use Driving API for route planning (with policy=5 bike-friendly when in riding mode).
+    // AMap.Riding is unreliable (not available on all API key tiers) and doesn't support waypoints.
+    if (drivingRouteRef.current) {
+      drivingRouteRef.current.clear();
     }
-  }, [currentLocation, origin, destination, waypoints, routeMode]);
+
+    if (!drivingRouteRef.current) return;
+
+    const waypointPositions = waypoints
+      .filter(wp => wp && wp.location)
+      .map(wp => new AMapRef.current.LngLat(wp.location!.lng, wp.location!.lat));
+
+    console.log('Planning route mode:', routeMode, 'with waypoints:', waypointPositions);
+
+    const drivingOptions: any = {
+      waypoints: waypointPositions,
+    };
+    // When in riding mode, use shortest-distance policy + no highways for bike-friendly route
+    if (routeMode === 'riding') {
+      drivingOptions.policy = 5; // AMap.DrivingPolicy.LEAST_DISTANCE — shortest path, no highways
+    }
+
+    drivingRouteRef.current.search(
+      startPos,
+      endPos,
+      drivingOptions,
+      (status: string, result: any) => {
+        if (status === 'complete') {
+          console.log('Driving route updated:', result);
+          if (onRouteUpdate && result.routes?.[0]) {
+            const route = result.routes[0];
+            onRouteUpdate({
+              distanceMeters: route.distance || 0,
+              timeSeconds: route.time || 0,
+              steps: parseAMapSteps(route, destination?.displayName),
+            });
+          }
+          // Fit view to show entire route on map — tight padding for small thumbnail
+          if (mapRef.current) {
+            // 1) Always resize first so AMap recalculates its viewport
+            mapRef.current.resize();
+            // 2) Fit to show the whole route
+            mapRef.current.setFitView(null, false, [10, 10, 10, 10]);
+          }
+        } else {
+          console.error('Driving route failed:', status, result);
+        }
+      }
+    );
+  }, [currentLocation, origin, destination, waypoints, routeMode, rerouteTrigger]);
+
+  // When AR mode toggles (hideControls changes), force map resize + fitView
+  // so the route is fully visible in the tiny 110×110 thumbnail
+  useEffect(() => {
+    if (!mapRef.current || !hideControls) return;
+    // Delay to let the DOM finish resizing the map container
+    const t1 = setTimeout(() => {
+      if (mapRef.current) {
+        mapRef.current.resize();
+        mapRef.current.setFitView(null, false, [5, 5, 5, 5]);
+      }
+    }, 50);
+    const t2 = setTimeout(() => {
+      if (mapRef.current) {
+        mapRef.current.resize();
+        mapRef.current.setFitView(null, false, [5, 5, 5, 5]);
+      }
+    }, 300);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, [hideControls]);
 
   return (
     <div className="relative w-full h-full">
@@ -324,12 +554,11 @@ export function MapWrapper({
           <button
             onClick={() => setRouteMode('riding')}
             className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all duration-200 ${
-              routeMode === 'riding' && waypoints.length === 0
+              routeMode === 'riding'
                 ? 'bg-[#EFFF33] text-black shadow-[0_0_15px_rgba(239,255,51,0.3)] font-black'
                 : 'text-white/60 hover:text-white hover:bg-white/5 font-bold'
-            } ${waypoints.length > 0 ? 'opacity-40 cursor-not-allowed' : ''}`}
-            disabled={waypoints.length > 0}
-            title={waypoints.length > 0 ? "Riding does not support stopovers" : "Riding route"}
+            }`}
+            title="骑行模式（有途经点时通过驾最短路径模拟）"
           >
             Riding
           </button>

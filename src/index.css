@@ -1,1 +1,36 @@
 @import "tailwindcss";
+
+/* 全局重置 */
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+}
+
+/* 横屏全屏铺满，无安全区域白边 */
+@media (orientation: landscape) {
+  html, body, #root {
+    width: 100vw;
+    height: 100vh;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+}
+
+/* 隐藏高德地图的 logo、版权信息和地图名称 */
+.amap-logo,
+.amap-copyright,
+.amap-layers img[src*="amap"] {
+  display: none !important;
+  opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}

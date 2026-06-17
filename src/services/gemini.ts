@@ -85,7 +85,7 @@ When the user confirms a place to go to, use either setDestination or addWaypoin
 
     // Initial Gemini request
     const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash", // Use latest gemini-3.5-flash model for higher performance and robust rate limits
+      model: "gemini-3.5-flash", // Use gemini-3.5-flash model
       contents: conversationHistory,
       config: {
         systemInstruction,

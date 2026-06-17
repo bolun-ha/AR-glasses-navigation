@@ -1,11 +1,18 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MapWrapper, globalPlacesSearch } from './components/MapNavigation';
+import { MapWrapper, globalPlacesSearch, RouteInfo } from './components/MapNavigation';
 import { PlaceModel, processVoiceCommand } from './services/gemini';
 import { speechService } from './services/speech';
 import { Mic, MicOff, Settings, Search, X, Navigation, MapPin, Battery, Clock, Timer, Activity, Volume2, Sliders, Heart, Flag, ArrowLeftRight, Lightbulb } from 'lucide-react';
 
 export default function App() {
   const [currentLocation, setCurrentLocation] = useState<{lat: number, lng: number} | null>(null);
+  const [currentSpeed, setCurrentSpeed] = useState<number>(0);
+  const [smoothedSpeed, setSmoothedSpeed] = useState<number>(0);
+  const speedHistoryRef = useRef<number[]>([]);
+
+  // Off-route detection distance (meters)
+  const [isOffRoute, setIsOffRoute] = useState(false);
+  const [rerouteTrigger, setRerouteTrigger] = useState(0); // Increment to trigger rerender in MapNavigation // m/s from GPS
   const [destination, setDestination] = useState<PlaceModel | null>(null);
   const [waypoints, setWaypoints] = useState<PlaceModel[]>([]);
   const [searchResults, setSearchResults] = useState<PlaceModel[]>([]);
@@ -14,13 +21,16 @@ export default function App() {
   // Navigation & Hud Simulation States
   const [isNavigating, setIsNavigating] = useState(false);
   const [navStepIndex, setNavStepIndex] = useState(0);
-  const [isAutoPlaying, setIsAutoPlaying] = useState(false); // Default false - real-time stepping
+  const [isAutoPlaying, setIsAutoPlaying] = useState(false);
   const [lastSpokenStepIndex, setLastSpokenStepIndex] = useState<number | null>(null);
   const [simulatedLocation, setSimulatedLocation] = useState<{lat: number, lng: number} | null>(null);
   const [simulatedSpeed, setSimulatedSpeed] = useState<number>(0);
-  const [simulatedETA, setSimulatedETA] = useState<number>(0); 
-  const [simulatedDistance, setSimulatedDistance] = useState<number>(0); 
+  const [simulatedETA, setSimulatedETA] = useState<number>(12);
+  const [simulatedDistance, setSimulatedDistance] = useState<number>(5000);
   const [navElapsedSeconds, setNavElapsedSeconds] = useState(0);
+  
+  // Real route data from AMap API — replaces all hardcoded simulation
+  const [routeInfo, setRouteInfo] = useState<RouteInfo | null>(null);
 
   useEffect(() => {
     let interval: NodeJS.Timeout | null = null;
@@ -135,10 +145,20 @@ export default function App() {
     if (navigator.geolocation) {
       const watchId = navigator.geolocation.watchPosition(
         (pos) => {
-          setCurrentLocation({
+          const newLoc = {
             lat: pos.coords.latitude,
             lng: pos.coords.longitude
-          });
+          };
+          setCurrentLocation(newLoc);
+          
+          // Speed smoothing with sliding window (last 8 readings)
+          const rawSpeed = pos.coords.speed ?? 0; // m/s
+          setCurrentSpeed(rawSpeed);
+          const history = speedHistoryRef.current;
+          history.push(rawSpeed);
+          if (history.length > 8) history.shift();
+          const avg = history.reduce((a, b) => a + b, 0) / history.length;
+          setSmoothedSpeed(avg);
         },
         (err) => console.error("Geolocation error:", err),
         { enableHighAccuracy: true }
@@ -237,62 +257,61 @@ export default function App() {
     };
 
     return (
-      <div className={`w-full max-w-lg mx-auto flex flex-col justify-between h-full py-4 px-6 relative text-left font-mono ${arSbsMode ? 'scale-[0.85]' : ''}`}>
+      <div className={`w-full max-w-lg mx-auto flex flex-col justify-between h-full py-0 px-4 relative text-left font-mono ${arSbsMode ? 'scale-[0.85]' : ''}`}>
         
-        {/* Optical Center Crosshair (Extremely subtle, non-blocking center vision) */}
+        {/* Optical Center Crosshair */}
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-[0.08]">
-          <div className={`w-12 h-12 rounded-full border border-dashed ${
+          <div className={`w-10 h-10 rounded-full border border-dashed ${
             arThemeColor === 'emerald-green' ? 'border-[#00FF66]' : arThemeColor === 'neon-cyan' ? 'border-[#00E5FF]' : 'border-[#EFFF33]'
           }`}></div>
-          <div className={`absolute w-16 h-[1px] ${
+          <div className={`absolute w-14 h-[1px] ${
             arThemeColor === 'emerald-green' ? 'bg-[#00FF66]' : arThemeColor === 'neon-cyan' ? 'bg-[#00E5FF]' : 'bg-[#EFFF33]'
           }`}></div>
-          <div className={`absolute h-16 w-[1px] ${
+          <div className={`absolute h-14 w-[1px] ${
             arThemeColor === 'emerald-green' ? 'bg-[#00FF66]' : arThemeColor === 'neon-cyan' ? 'bg-[#00E5FF]' : 'bg-[#EFFF33]'
           }`}></div>
         </div>
 
-        {/* TOP STATUS BAR: Time, Stopwatch and System Readings — Emoji-free & Lucide icons */}
+        {/* TOP SECTION: Status Bar + Turn Indicator */}
         <div className="flex flex-col gap-1 shrink-0 select-none z-20">
-          <div className="flex justify-between items-center px-4 py-2 border border-white/10 rounded-xl bg-black/60 relative overflow-hidden backdrop-blur-md">
-            <div className="flex items-center gap-2.5">
-              <span className={`text-[9px] font-black tracking-widest ${textHex} flex items-center gap-1.5`}>
-                <Battery size={11} className="stroke-[2.5]" /> <span>85%</span>
+          <div className="relative flex items-center px-2 py-0 border border-white/10 rounded-[6px] bg-black/60 backdrop-blur-md">
+            <div className="flex items-center gap-1.5 flex-1">
+              <span className={`text-[5px] font-black tracking-widest ${textHex} flex items-center gap-0.5`}>
+                <Battery size={6} className="stroke-[2.5]" /> <span>85%</span>
               </span>
-              <span className="text-[8px] text-white/30 uppercase font-bold">
+              <span className="text-[5px] text-white/30 uppercase font-bold">
                 | HDG: {headingDegrees}° {headingText}
               </span>
             </div>
-            
-            <div className="flex items-center gap-3.5 font-mono text-[10px] font-bold text-white/95">
-              <div className="flex items-center gap-1">
-                <Clock size={11} className="text-white/40 stroke-[2.5]" />
+            <div className="flex items-center gap-1.5 font-mono text-[6px] font-bold text-white/95">
+              <div className="flex items-center gap-0.5">
+                <Clock size={6} className="text-white/40 stroke-[2.5]" />
                 <span>{new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>
               </div>
-              <div className="flex items-center gap-1.5">
-                <Timer size={11} className={`${textHex} stroke-[2.5]`} />
+              <div className="flex items-center gap-0.5">
+                <Timer size={6} className={`${textHex} stroke-[2.5]`} />
                 <span className={textHex}>{formatTimer(navElapsedSeconds)}</span>
               </div>
             </div>
           </div>
         </div>
 
-        {/* UPPER RIGHT FLIGHT DIRECTIVE: Floating Turn Icon Overlay */}
+        {/* Turn Indicator — 状态栏右下，右边对齐 */}
         {currentStep && (
-          <div className="absolute top-[4.2rem] right-6 p-2.5 rounded-xl bg-black/60 border border-white/10 text-right select-none pointer-events-none z-20 backdrop-blur-md shadow-[0_4px_12px_rgba(0,0,0,0.5)]">
+          <div className="absolute top-[2.8rem] right-6 p-2 rounded-xl bg-black/60 border border-white/10 backdrop-blur-md select-none pointer-events-none z-20 shadow-[0_4px_12px_rgba(0,0,0,0.5)]">
             <div className="flex items-center gap-2 justify-end">
-              <span className="text-[8px] text-white/40 font-bold uppercase tracking-wider">NEXT TURN</span>
-              <div className={`p-1.5 rounded-full bg-white/5 border border-white/15 ${textHex}`}>
+              <span className="text-[6px] text-white/40 font-bold uppercase tracking-wider">NEXT TURN</span>
+              <div className={`p-1 rounded-full bg-white/5 border border-white/15 ${textHex}`}>
                 {getHUDActionIcon(currentStep.action)}
               </div>
             </div>
-            <span className={`text-lg font-black block tracking-tighter ${textHex} font-mono mt-1 leading-none`}>
-              {simulatedDistance >= 1000 
-                ? `${(simulatedDistance / 1000).toFixed(1)} KM` 
-                : `${simulatedDistance} M`
+            <span className={`text-base font-black block tracking-tighter ${textHex} font-mono mt-1 leading-none`}>
+              {currentStep.stepDistanceMeters >= 1000 
+                ? `${(currentStep.stepDistanceMeters / 1000).toFixed(1)} KM` 
+                : `${currentStep.stepDistanceMeters} M`
               }
             </span>
-            <span className="text-[7.5px] text-white/60 block max-w-[120px] truncate uppercase font-bold mt-1">
+            <span className="text-[6px] text-white/60 block max-w-[120px] truncate uppercase font-bold mt-1">
               {currentStep.action === 'left' && "准备左转弯"}
               {currentStep.action === 'right' && "准备右转弯"}
               {currentStep.action === 'straight' && "保持直行"}
@@ -303,278 +322,183 @@ export default function App() {
           </div>
         )}
 
-        {/* MAIN HUD CONTENT: Displays dynamic dashboard metrics in the mid-lower section, center stays blank for driving focus */}
-        <div className="flex-1 flex flex-col justify-end py-2 relative my-auto">
+        {/* MIDDLE: Large blank area for clear driving visibility */}
+        <div className="flex-1 min-h-0 relative">
+          {/* 中间大面积留白，确保眼镜视野通透 */}
+        </div>
+
+        {/* BOTTOM SECTION: Dashboard + Speech + Mic + Controls */}
+        <div className="flex flex-col gap-1.5 shrink-0 select-none z-20">
           {currentStep ? (
-            <div className="w-full flex flex-col gap-3.5 mt-auto">
-              
-              {/* Core Dashboard Row (Telemetry) — Styled beautifully to match actual cycling HUD products */}
-              <div className="grid grid-cols-4 gap-3.5 w-full py-3 px-1.5 border border-white/10 bg-[#000000]/65 backdrop-blur-md rounded-xl select-none z-10 shadow-[0_4px_12px_rgba(0,0,0,0.4)]">
-                {/* SPD Indicator */}
-                <div className="flex flex-col items-center border-r border-white/5">
-                  <span className="text-[7.5px] opacity-40 uppercase font-black tracking-wider text-white">SPD (km/h)</span>
-                  <span className={`text-2xl font-black font-mono tracking-tighter mt-1 leading-none ${textHex}`}>
-                    {isAutoPlaying ? simulatedSpeed : (navStepIndex === 0 ? 0 : Math.round(22 + Math.cos(navElapsedSeconds / 10) * 3))}
+            <>
+              {/* Core Dashboard Row (4-column grid) */}
+              <div className="grid grid-cols-4 gap-1.5 py-1 px-1 bg-[#000000]/50 rounded-xl shadow-[0_4px_12px_rgba(0,0,0,0.4)]">
+                <div className="flex flex-col items-center border-r border-white/10">
+                  <span className="text-[4px] opacity-40 uppercase font-black tracking-wider text-white">SPD (km/h)</span>
+                  <span className={`text-xs font-black font-mono tracking-tighter mt-0.5 leading-none ${textHex}`}>
+                    {smoothedSpeed > 0
+                      ? Math.round(smoothedSpeed * 3.6)
+                      : (isAutoPlaying ? currentStep.speed : (navStepIndex === 0 ? 0 : currentStep.speed))}
                   </span>
                 </div>
-                
-                {/* GRAD Indicator */}
-                <div className="flex flex-col items-center border-r border-white/5">
-                  <span className="text-[7.5px] opacity-40 uppercase font-black tracking-wider text-white">GRAD (%)</span>
-                  <span className={`text-2xl font-black font-mono tracking-tighter mt-1 leading-none ${textHex}`}>
+                <div className="flex flex-col items-center border-r border-white/10">
+                  <span className="text-[4px] opacity-40 uppercase font-black tracking-wider text-white">GRAD (%)</span>
+                  <span className={`text-xs font-black font-mono tracking-tighter mt-0.5 leading-none ${textHex}`}>
                     {navStepIndex === 0 ? '0' : (navStepIndex % 2 === 0 ? `+${(3 + Math.sin(navElapsedSeconds / 6) * 1.5).toFixed(0)}` : `-${(1 + Math.cos(navElapsedSeconds / 4) * 0.5).toFixed(0)}`)}%
                   </span>
                 </div>
-
-                {/* CAD Indicator */}
-                <div className="flex flex-col items-center border-r border-white/5">
-                  <span className="text-[7.5px] opacity-40 uppercase font-black tracking-wider text-white">CAD (rpm)</span>
-                  <span className={`text-2xl font-black font-mono tracking-tighter mt-1 leading-none ${textHex}`}>
+                <div className="flex flex-col items-center border-r border-white/10">
+                  <span className="text-[4px] opacity-40 uppercase font-black tracking-wider text-white">CAD (rpm)</span>
+                  <span className={`text-xs font-black font-mono tracking-tighter mt-0.5 leading-none ${textHex}`}>
                     {navStepIndex === 0 ? '0' : Math.round(82 + Math.sin(navElapsedSeconds / 5) * 4)}
                   </span>
                 </div>
-
-                {/* HR Pulse Indicator — Sleek beating stroke icon */}
                 <div className="flex flex-col items-center">
-                  <span className="text-[7.5px] opacity-40 uppercase font-black tracking-wider text-white flex items-center gap-1 select-none">
-                    HR <Heart size={8} className="fill-red-500 stroke-red-500 animate-pulse" />
+                  <span className="text-[4px] opacity-40 uppercase font-black tracking-wider text-white flex items-center gap-1">
+                    HR <Heart size={4} className="fill-red-500 stroke-red-500 animate-pulse" />
                   </span>
-                  <span className="text-2xl font-black font-mono tracking-tighter mt-1 leading-none text-white">
+                  <span className="text-xs font-black font-mono tracking-tighter mt-0.5 leading-none text-white">
                     {navStepIndex === 0 ? '72' : Math.round(124 + Math.sin(navElapsedSeconds / 12) * 5)}
                   </span>
                 </div>
               </div>
 
-              {/* HUD Subtitle Glassmorphic Box  */}
-              <div className="w-full select-none z-10">
-                <div className="p-3 rounded-xl bg-black/60 border border-white/5 backdrop-blur-md relative overflow-hidden shadow-[0_4px_12px_rgba(0,0,0,0.5)]">
-                  <div className="flex justify-between items-center mb-1">
-                    <span className={`text-[8px] font-black uppercase tracking-[0.15em] ${textHex} flex items-center gap-1`}>
-                      <Volume2 size={11} className="stroke-[2.5]" /> HUD Speech Guidance
-                    </span>
-                    <span className="text-[8px] text-white/30 uppercase font-bold font-sans">
-                      ROUTE: {origin ? origin.displayName?.slice(0, 8) : "自适应"} ➔ {destination?.displayName?.slice(0, 8) || "目的地"}
-                    </span>
-                  </div>
-                  <p className="text-[11px] font-bold text-white/90 leading-relaxed font-sans mt-0.5">
-                    {currentStep.text}
-                  </p>
+              {/* Speech Guidance Box */}
+              <div className="p-2 rounded-xl bg-black/60 border border-white/5 backdrop-blur-md shadow-[0_4px_12px_rgba(0,0,0,0.5)]">
+                <div className="flex justify-between items-center mb-0.5">
+                  <span className={`text-[6px] font-black uppercase tracking-[0.15em] ${textHex} flex items-center gap-1`}>
+                    <Volume2 size={8} className="stroke-[2.5]" /> HUD Speech Guidance
+                  </span>
+                  <span className="text-[6px] text-white/30 uppercase font-bold font-sans truncate ml-1 max-w-[120px]">
+                    {origin?.displayName?.slice(0, 6) || ""}➔{destination?.displayName?.slice(0, 6) || ""}
+                  </span>
                 </div>
+                <p className="text-[9px] font-bold text-white/90 leading-snug font-sans line-clamp-2">
+                  {currentStep.text}
+                </p>
               </div>
-
-            </div>
+            </>
           ) : (
-            <div className="w-full flex flex-col items-center justify-center text-center py-6 select-none z-10 bg-black/40 backdrop-blur-md border border-white/5 rounded-2xl">
-              <div className={`w-10 h-10 rounded-full border-2 flex items-center justify-center animate-bounce ${
+            <div className="flex flex-col items-center justify-center text-center py-3 bg-black/40 backdrop-blur-md border border-white/5 rounded-xl">
+              <div className={`w-7 h-7 rounded-full border-2 flex items-center justify-center animate-bounce ${
                 arThemeColor === 'emerald-green' ? 'border-[#00FF66] text-[#00FF66]' : arThemeColor === 'neon-cyan' ? 'border-[#00E5FF] text-[#00E5FF]' : 'border-[#EFFF33] text-[#EFFF33]'
-              }`}>
-                ▲
-              </div>
-              <h4 className="text-xs font-bold text-white uppercase mt-4 tracking-widest">
-                No Active Guidance
-              </h4>
-              <p className="text-[9px] text-white/50 uppercase mt-1.5 max-w-[280px]">
-                Say "I want to go to Beijing Zoo" or use search to establish routes & launch HUD.
+              }`}>▲</div>
+              <h4 className="text-[9px] font-bold text-white uppercase mt-1.5 tracking-widest">No Active Guidance</h4>
+              <p className="text-[7px] text-white/50 uppercase mt-1 max-w-[240px]">
+                Say 'I want to go to Beijing Zoo' or use search to establish routes.
               </p>
             </div>
           )}
 
-          {/* Voice Microphone Standby Panel — High-tech minimalist indicator */}
-          <div className="w-full mt-3 flex items-center justify-between border-t border-white/5 pt-2.5 min-h-[30px] select-none z-10">
-            <div className="flex items-center gap-2">
-              <span className={`text-[8px] font-black uppercase tracking-wider ${textHex} flex items-center gap-1.5`}>
+          {/* Voice Microphone Status — 可点击语音交互 */}
+          <div className="flex items-center justify-between border-t border-white/5 pt-1.5 min-h-[22px]">
+            <button onClick={toggleListening} className="flex items-center gap-1.5 cursor-pointer text-left">
+              <span className={`text-[7px] font-black uppercase tracking-wider ${textHex} flex items-center gap-1`}>
                 {isListening ? (
-                  <>
-                    <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse shrink-0" />
-                    <span>MIC ACTIVE</span>
-                  </>
+                  <><span className="w-1 h-1 rounded-full bg-red-400 animate-pulse shrink-0" /><span>MIC ACTIVE</span></>
                 ) : (
-                  <>
-                    <span className={`w-1.5 h-1.5 rounded-full opacity-60 shrink-0 ${
-                      arThemeColor === 'emerald-green' ? 'bg-[#00FF66]' : arThemeColor === 'neon-cyan' ? 'bg-[#00E5FF]' : 'bg-[#EFFF33]'
-                    }`} />
-                    <span>HUD STANDBY</span>
-                  </>
+                  <><span className={`w-1 h-1 rounded-full opacity-60 shrink-0 ${
+                    arThemeColor === 'emerald-green' ? 'bg-[#00FF66]' : arThemeColor === 'neon-cyan' ? 'bg-[#00E5FF]' : 'bg-[#EFFF33]'
+                  }`} /><span>HUD STANDBY</span></>
                 )}
               </span>
-            </div>
-
+            </button>
             {isListening ? (
-              <div className="flex gap-1 items-center">
-                <div className={`w-0.5 h-2 rounded-full animate-bounce ${
-                  arThemeColor === 'emerald-green' ? 'bg-[#00FF66]' : arThemeColor === 'neon-cyan' ? 'bg-[#00E5FF]' : 'bg-[#EFFF33]'
-                }`} style={{animationDelay: '0ms'}} />
-                <div className={`w-0.5 h-4 rounded-full animate-bounce ${
-                  arThemeColor === 'emerald-green' ? 'bg-[#00FF66]' : arThemeColor === 'neon-cyan' ? 'bg-[#00E5FF]' : 'bg-[#EFFF33]'
-                }`} style={{animationDelay: '100ms'}} />
-                <div className={`w-0.5 h-3 rounded-full animate-bounce ${
-                  arThemeColor === 'emerald-green' ? 'bg-[#00FF66]' : arThemeColor === 'neon-cyan' ? 'bg-[#00E5FF]' : 'bg-[#EFFF33]'
-                }`} style={{animationDelay: '200ms'}} />
-                <div className={`w-0.5 h-5 rounded-full animate-bounce ${
-                  arThemeColor === 'emerald-green' ? 'bg-[#00FF66]' : arThemeColor === 'neon-cyan' ? 'bg-[#00E5FF]' : 'bg-[#EFFF33]'
-                }`} style={{animationDelay: '300ms'}} />
+              <div className="flex gap-0.5 items-center">
+                {[0,1,2,3].map(i => (
+                  <div key={i} className={`w-[2px] rounded-full animate-bounce ${
+                    arThemeColor === 'emerald-green' ? 'bg-[#00FF66]' : arThemeColor === 'neon-cyan' ? 'bg-[#00E5FF]' : 'bg-[#EFFF33]'
+                  }`} style={{height: `${8 + i*4}px`, animationDelay: `${i*100}ms`}} />
+                ))}
               </div>
             ) : (
               <div className="flex gap-0.5 opacity-25">
-                <div className="w-1 h-1 bg-white rounded-full" />
-                <div className="w-1 h-1 bg-white rounded-full" />
-                <div className="w-1 h-1 bg-white rounded-full" />
+                {[1,2,3,4].map(i => <div key={i} className="w-1 h-1 bg-white rounded-full" />)}
               </div>
             )}
           </div>
+
+          {/* BOTTOM PANEL: Control Buttons */}
+          {eye !== 'right' && (
+            <div className="w-full pt-1.5 border-t border-white/10 flex items-center justify-between text-[7px] pointer-events-auto">
+              <span className="text-white/40 tracking-wider">EYE-{eye.toUpperCase()}</span>
+              <div className="flex gap-1.5">
+                <button onClick={() => { setIsARGlassMode(false); setArSbsMode(false); setShowHUDSettings(false); }}
+                  className="px-2 py-1 border border-white/20 text-white/60 rounded-lg hover:bg-white/10 transition text-[7px] uppercase font-black cursor-pointer">
+                  退出
+                </button>
+                <button onClick={() => setShowHUDSettings(prev => !prev)}
+                  className="px-2 py-1 border border-white/20 rounded-lg transition text-[7px] uppercase font-black cursor-pointer"
+                  style={{ color: showHUDSettings ? '#EFFF33' : 'rgba(255,255,255,0.7)', borderColor: showHUDSettings ? '#EFFF3340' : 'rgba(255,255,255,0.2)' }}>
+                  参数
+                </button>
+                {isNavigating && (
+                  <>
+                    <button onClick={() => { setIsNavigating(false); setIsAutoPlaying(false); setNavStepIndex(0); setRouteInfo(null); }}
+                      className="px-2 py-1 border border-red-500/20 text-red-400 rounded-lg hover:bg-red-500 hover:text-white transition text-[7px] uppercase font-black cursor-pointer">
+                      结束
+                    </button>
+                    {navStepIndex < steps.length - 1 && (
+                      <button onClick={() => setNavStepIndex(prev => prev + 1)}
+                        className="px-2 py-1 rounded-lg transition text-[7px] uppercase font-black cursor-pointer bg-[#EFFF33] text-black">
+                        下一站
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+          {eye === 'right' && (
+            <div className="w-full pt-1.5 border-t border-white/10 flex items-center justify-between text-[7px] text-white/40">
+              <span>EYE-RIGHT (SBS SLAVE)</span>
+              <span>AUTO-SYNC</span>
+            </div>
+          )}
         </div>
 
-        {/* HUD SETTINGS POPUP overlay nested beautifully inside AR view boundaries */}
+        {/* HUD SETTINGS POPUP */}
         {showHUDSettings && (
-          <div 
-            className="absolute inset-x-6 bottom-24 p-4 rounded-2xl bg-black/95 border shadow-2xl z-40 pointer-events-auto backdrop-blur-xl flex flex-col gap-3 font-sans transition-all duration-300 animate-in fade-in slide-in-from-bottom-5"
-            style={{ 
-              borderColor: arThemeColor === 'emerald-green' ? '#00FF6640' : arThemeColor === 'neon-cyan' ? '#00E5FF40' : '#EFFF3340' 
-            }}
-          >
-            <div className="flex justify-between items-center border-b border-white/10 pb-2">
-              <span className={`text-[10px] font-black uppercase tracking-[0.15em] ${textHex} flex items-center gap-1.5`}>
-                <Sliders size={12} className="stroke-[2]" /> HUD 投射系统配置 (Config)
+          <div className="absolute inset-x-4 bottom-24 p-3 rounded-2xl bg-black/95 border shadow-2xl z-40 pointer-events-auto backdrop-blur-xl flex flex-col gap-2 font-sans"
+            style={{ borderColor: arThemeColor === 'emerald-green' ? '#00FF6640' : arThemeColor === 'neon-cyan' ? '#00E5FF40' : '#EFFF3340' }}>
+            <div className="flex justify-between items-center border-b border-white/10 pb-1.5">
+              <span className={`text-[8px] font-black uppercase tracking-[0.15em] ${textHex} flex items-center gap-1.5`}>
+                <Sliders size={10} className="stroke-[2]" /> HUD Config
               </span>
-              <button 
-                onClick={() => setShowHUDSettings(false)} 
-                className="text-white/40 hover:text-white p-1 rounded-full hover:bg-white/5 transition"
-              >
-                <X size={12} className="stroke-[2.5]" />
+              <button onClick={() => setShowHUDSettings(false)} className="text-white/40 hover:text-white p-1 rounded-full hover:bg-white/5 transition">
+                <X size={10} />
               </button>
             </div>
-            
-            {/* SBS mode */}
-            <div className="flex flex-col gap-1 text-left">
-              <label className="flex items-center gap-2.5 cursor-pointer">
-                <input 
-                  type="checkbox" 
-                  checked={arSbsMode}
-                  onChange={(e) => setArSbsMode(e.target.checked)}
-                  className="w-3.5 h-3.5 rounded border-white/20 bg-transparent text-emerald-500 focus:ring-0 focus:outline-none"
-                />
-                <span className="text-[10px] uppercase tracking-[0.05em] text-white/80 font-bold">左右双目分屏 (3D SBS Layout)</span>
-              </label>
-              <span className="text-[9px] text-white/40 pl-6 leading-relaxed">
-                {arSbsMode ? "已开启双目立体穿透画面。适用于VR纸盒、双镜头AR头显。" : "单目居中宽屏投影模式。适合大多数AR智能眼镜外接显示。"}
-              </span>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={arSbsMode} onChange={(e) => setArSbsMode(e.target.checked)} className="w-3 h-3 rounded border-white/20 bg-transparent" />
+              <span className="text-[8px] uppercase text-white/80 font-bold">SBS 双目分屏</span>
+            </label>
+            <div className="flex justify-between items-center text-[8px] text-white/40 uppercase font-black">
+              <span>地图透射度</span>
+              <span className={`${textHex} font-mono`}>{mapOpacity}%</span>
             </div>
-
-            {/* Opacity */}
-            <div className="flex flex-col gap-1.5 text-left mt-1">
-              <div className="flex justify-between items-center text-[10px] text-white/40 uppercase font-black">
-                <span>实景地图安全透射度 (Map Opacity)</span>
-                <span className={`${textHex} font-mono font-bold`}>{mapOpacity}%</span>
-              </div>
-              <input 
-                type="range" 
-                min="0" 
-                max="100" 
-                value={mapOpacity} 
-                onChange={(e) => setMapOpacity(Number(e.target.value))}
-                className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-[#EFFF33]"
-                style={{
-                  accentColor: arThemeColor === 'emerald-green' ? '#00FF66' : arThemeColor === 'neon-cyan' ? '#00E5FF' : '#EFFF33'
-                }}
-              />
+            <input type="range" min="0" max="100" value={mapOpacity} onChange={(e) => setMapOpacity(Number(e.target.value))}
+              className="w-full h-1 bg-white/10 rounded-lg cursor-pointer"
+              style={{ accentColor: arThemeColor === 'emerald-green' ? '#00FF66' : arThemeColor === 'neon-cyan' ? '#00E5FF' : '#EFFF33' }} />
+            <span className="text-[8px] text-white/40 uppercase font-black">主题色</span>
+            <div className="grid grid-cols-3 gap-1.5">
+              {[
+                { value: 'neon-yellow', label: '暖橙黄', hex: '#EFFF33' },
+                { value: 'emerald-green', label: '翡翠绿', hex: '#00FF66' },
+                { value: 'neon-cyan', label: '霓虹青', hex: '#00E5FF' }
+              ].map(item => (
+                <button key={item.value} onClick={() => setArThemeColor(item.value as any)}
+                  className="text-[8px] font-black py-1.5 rounded-xl uppercase cursor-pointer"
+                  style={{ backgroundColor: arThemeColor === item.value ? item.hex : 'rgba(255,255,255,0.05)', color: arThemeColor === item.value ? '#000' : 'rgba(255,255,255,0.6)' }}>
+                  {item.label}
+                </button>
+              ))}
             </div>
-
-            {/* Color Theme */}
-            <div className="flex flex-col gap-1 text-left mt-1">
-              <span className="text-[10px] text-white/40 uppercase font-black mb-1">HUD 界面投影配色 (System Theme)</span>
-              <div className="grid grid-cols-3 gap-2 mt-0.5">
-                {[
-                  { value: 'neon-yellow', label: '暖橙黄', hex: '#EFFF33' },
-                  { value: 'emerald-green', label: '翡翠绿', hex: '#00FF66' },
-                  { value: 'neon-cyan', label: '霓虹青', hex: '#00E5FF' }
-                ].map(item => (
-                  <button 
-                    key={item.value}
-                    onClick={() => setArThemeColor(item.value as any)}
-                    className="text-[10px] font-black py-2 rounded-xl uppercase select-none transition cursor-pointer flex items-center justify-center gap-1.5"
-                    style={{
-                      backgroundColor: arThemeColor === item.value ? item.hex : 'rgba(255,255,255,0.05)',
-                      color: arThemeColor === item.value ? '#000000' : 'rgba(255,255,255,0.6)'
-                    }}
-                  >
-                    <span 
-                      className="w-1.5 h-1.5 rounded-full shrink-0"
-                      style={{ backgroundColor: arThemeColor === item.value ? '#000000' : item.hex }}
-                    />
-                    {item.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* BOTTOM PANEL: Control Buttons */}
-        {eye !== 'right' && (
-          <div className="w-full shrink-0 pt-2 border-t border-white/10 flex items-center justify-between text-[9px] pointer-events-auto z-20">
-            <span className="text-white/40 tracking-wider">EYE-{eye.toUpperCase()}</span>
-            
-            <div className="flex gap-2">
-              <button 
-                onClick={() => {
-                  setIsARGlassMode(false);
-                  setArSbsMode(false);
-                  setShowHUDSettings(false);
-                }}
-                className="px-2.5 py-1.5 border border-white/20 text-white/70 rounded-lg hover:bg-white/10 transition text-[9px] uppercase font-black cursor-pointer"
-              >
-                退出 (Exit)
-              </button>
-
-              <button 
-                onClick={() => {
-                  setShowHUDSettings(prev => !prev);
-                }}
-                className="px-2.5 py-1.5 border rounded-lg transition text-[9px] uppercase font-black cursor-pointer flex items-center gap-1"
-                style={{
-                  color: showHUDSettings ? (arThemeColor === 'emerald-green' ? '#00FF66' : arThemeColor === 'neon-cyan' ? '#00E5FF' : '#EFFF33') : '#ffffffcc',
-                  borderColor: showHUDSettings ? (arThemeColor === 'emerald-green' ? '#00FF66' : arThemeColor === 'neon-cyan' ? '#00E5FF' : '#EFFF33') : 'rgba(255,255,255,0.2)',
-                  backgroundColor: showHUDSettings ? 'rgba(255,255,255,0.05)' : undefined
-                }}
-              >
-                <Sliders size={10} className="stroke-[2.5]" /> HUD 参数
-              </button>
-
-              {isNavigating && (
-                <>
-                  <button 
-                    onClick={() => {
-                      setIsNavigating(false);
-                      setIsAutoPlaying(false);
-                      setNavStepIndex(0);
-                      speechService.speak("Spatial HUD mode ended.");
-                    }}
-                    className="px-2.5 py-1.5 border border-red-500/20 text-red-400 rounded-lg hover:bg-red-500 hover:text-white transition text-[9px] uppercase font-black cursor-pointer"
-                  >
-                    结束 (End)
-                  </button>
-                  {navStepIndex < steps.length - 1 && (
-                    <button 
-                      onClick={() => setNavStepIndex(prev => prev + 1)}
-                      className={`px-2.5 py-1.5 rounded-lg transition text-[9px] uppercase font-black cursor-pointer ${btnBg}`}
-                    >
-                      下一站 (Next)
-                    </button>
-                  )}
-                </>
-              )}
-            </div>
-          </div>
-        )}
-        
-        {eye === 'right' && (
-          <div className="w-full shrink-0 pt-2 border-t border-white/10 flex items-center justify-between text-[9px] text-white/40">
-            <span>EYE-RIGHT (SBS SLAVE CODE)</span>
-            <span>AUTO-SYNC ACTIVE</span>
           </div>
         )}
       </div>
     );
+
   };
 
   const handleSpeak = (text: string) => {
@@ -591,10 +515,32 @@ export default function App() {
     });
   };
 
-  // Dynamic navigation simulation step generator
+  // Dynamic navigation step generator
+  // Non-simulated mode ("Real GPS"): ONLY use real route data from AMap
+  // Simulated mode ("Auto Sim"): fallback to synthetic steps for preview
   const generateNavSteps = () => {
     if (!destination) return [];
-    
+
+    // When real route data is available, convert RouteStep[] to SimStep[]
+    if (routeInfo?.steps && routeInfo.steps.length > 0) {
+      return routeInfo.steps.map((step): SimStep => ({
+        text: step.text,
+        action: step.action,
+        location: step.location,
+        distanceLeftMeters: step.totalDistanceMeters,
+        stepDistanceMeters: step.distanceMeters,
+        etaLeftMinutes: Math.round(step.totalTimeSeconds / 60),
+        speed: step.distanceMeters > 0 && step.timeSeconds > 0
+          ? Math.round((step.distanceMeters / 1000) / (step.timeSeconds / 3600))
+          : 0,
+      }));
+    }
+
+    // No real route data yet — show loading message instead of simulating
+    // (Auto Sim mode is excluded from this check; it generates preview steps)
+    if (!isAutoPlaying) return [];
+
+    // Simulated steps for preview/demo mode only (isAutoPlaying = true)
     const start = (origin && origin.location) ? origin.location : (currentLocation || { lat: 39.90872, lng: 116.39748 });
     const end = destination.location || { lat: 39.91125, lng: 116.41162 };
     
@@ -603,6 +549,7 @@ export default function App() {
       action: 'start' | 'straight' | 'left' | 'right' | 'waypoint' | 'arrive';
       location: { lat: number; lng: number };
       distanceLeftMeters: number;
+      stepDistanceMeters: number;
       etaLeftMinutes: number;
       speed: number;
     };
@@ -610,12 +557,15 @@ export default function App() {
     const steps: SimStep[] = [];
     
     // Step 0: Start
+    const totalDistKm = routeInfo ? (routeInfo.distanceMeters / 1000).toFixed(1) : "5.0";
+    const totalTimeMin = routeInfo ? Math.round(routeInfo.timeSeconds / 60) : 12;
     steps.push({
-      text: `准备出发。起点：${origin ? origin.displayName : "当前位置"}，终点：${destination.displayName}。全程预计行驶5公里，大约需要12分钟。请沿当前道路向前行驶。`,
+      text: `准备出发。起点：${origin ? origin.displayName : "当前位置"}，终点：${destination.displayName}。全程预计行驶${totalDistKm}公里，大约需要${totalTimeMin}分钟。请沿当前道路向前行驶。`,
       action: 'start',
       location: start,
-      distanceLeftMeters: 5000,
-      etaLeftMinutes: 12,
+      distanceLeftMeters: routeInfo?.distanceMeters || 5000,
+      stepDistanceMeters: 0,
+      etaLeftMinutes: totalTimeMin,
       speed: 0
     });
 
@@ -633,6 +583,7 @@ export default function App() {
           lng: start.lng + (wpLoc.lng - start.lng) * 0.6 
         },
         distanceLeftMeters: Math.round(3500 / (index + 1)),
+        stepDistanceMeters: Math.round(3500 / (index + 1)),
         etaLeftMinutes: Math.round(9 / (index + 1)),
         speed: 48
       });
@@ -642,6 +593,7 @@ export default function App() {
         action: 'waypoint',
         location: wpLoc,
         distanceLeftMeters: Math.round(1800 / (index + 1)),
+        stepDistanceMeters: Math.round(1800 / (index + 1)),
         etaLeftMinutes: Math.round(6 / (index + 1)),
         speed: 25
       });
@@ -657,6 +609,7 @@ export default function App() {
       action: 'right',
       location: preArrival,
       distanceLeftMeters: 600,
+      stepDistanceMeters: 600,
       etaLeftMinutes: 2,
       speed: 55
     });
@@ -667,6 +620,7 @@ export default function App() {
       action: 'arrive',
       location: end,
       distanceLeftMeters: 0,
+      stepDistanceMeters: 0,
       etaLeftMinutes: 0,
       speed: 0
     });
@@ -682,7 +636,13 @@ export default function App() {
     }
 
     const steps = generateNavSteps();
-    if (steps.length === 0) return;
+    if (steps.length === 0) {
+      // No route data yet — show a waiting state
+      if (!isAutoPlaying && routeInfo === null) {
+        handleSpeak("正在获取路线数据，请稍候...");
+      }
+      return;
+    }
 
     const currentStep = steps[navStepIndex];
     if (!currentStep) return;
@@ -723,7 +683,7 @@ export default function App() {
     if (!isNavigating || isAutoPlaying || !currentLocation || !destination) return;
 
     const steps = generateNavSteps();
-    if (steps.length === 0) return;
+    if (steps.length === 0 || steps.length <= navStepIndex + 1) return;
 
     // See if the user has reached/approached the next step's geographic coordinate
     const nextIdx = navStepIndex + 1;
@@ -742,10 +702,40 @@ export default function App() {
     }
   }, [currentLocation, isNavigating, isAutoPlaying, navStepIndex]);
 
+  // Off-route detection: uses currentLocation + routeInfo steps
+  useEffect(() => {
+    if (!isNavigating || !currentLocation || !routeInfo?.steps) return;
+    
+    // Find closest distance from current position to any route step coordinate
+    let minDist = Infinity;
+    for (const step of routeInfo.steps) {
+      const d = getDistance(
+        currentLocation.lat, currentLocation.lng,
+        step.location.lat, step.location.lng
+      );
+      if (d < minDist) minDist = d;
+    }
+    
+    const OFF_ROUTE_THRESHOLD = 80; // meters
+    if (minDist > OFF_ROUTE_THRESHOLD) {
+      if (!isOffRoute) {
+        setIsOffRoute(true);
+        handleSpeak("您已偏离规划路线，正在重新规划路线");
+        // Trigger reroute by incrementing counter
+        setRerouteTrigger(prev => prev + 1);
+      }
+    } else {
+      if (isOffRoute) {
+        setIsOffRoute(false);
+        handleSpeak("已回到规划路线");
+      }
+    }
+  }, [currentLocation, isNavigating, routeInfo]);
+
   const executeCommand = async (text: string) => {
     if (!text.trim()) return;
     setSystemMessage(`Processing: "${text}"...`);
-
+    try {
     const voiceCmd = text.toLowerCase();
     
     // Voice command handlers for AR Glass Mode controls
@@ -869,43 +859,54 @@ export default function App() {
       },
       handleSpeak
     );
+  } catch (err: any) {
+    console.error("executeCommand error:", err);
+    setSystemMessage(err.message || "Gemini API 调用失败，检查网络或 API Key");
+  }
   };
 
   const toggleListening = async () => {
     try {
       if (!isListeningRef.current) {
-        // Request microphone permission explicitly to ensure it works across browsers/iframes
+        // Check browser support first
+        const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+        if (!SpeechRecognition) {
+          setSystemMessage("此浏览器不支持语音识别，请使用 Chrome");
+          return;
+        }
+
+        setIsListening(true);
+        setSystemMessage("正在请求麦克风权限...");
+
+        // Request microphone permission explicitly
         try {
           const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          // Stop immediately, we just needed the permission granted
           stream.getTracks().forEach(track => track.stop());
         } catch (mediaErr) {
-          console.warn("Microphone permission prompt failed or denied:", mediaErr);
+          setSystemMessage("麦克风权限被拒绝，请在浏览器设置中允许");
+          setIsListening(false);
+          return;
         }
         
-        setIsListening(true);
-        setSystemMessage("Listening (Speak now)...");
-        // Wait for speech
+        setSystemMessage("🎤 请说话...");
         const text = await speechService.listen();
         setIsListening(false);
+        setSystemMessage(`识别结果: "${text}"`);
         setInputText(text);
         executeCommand(text);
       } else {
         speechService.stopListening();
         setIsListening(false);
-        setSystemMessage("Stopped listening.");
+        setSystemMessage("已停止语音识别");
       }
     } catch (err: any) {
       console.error(err);
       setIsListening(false);
       if (err.message && err.message.includes('aborted')) {
-         setSystemMessage("Stopped listening.");
+         setSystemMessage("已停止语音识别");
       } else {
-         setSystemMessage(err.message || "Speech recognition stopped or failed.");
+         setSystemMessage(err.message || "语音识别失败，请重试");
       }
-      
-      // Auto-restart even on error if it's "no-speech" or similar?
-      // Actually better to just let it stop on error so we don't loop infinitely on mic denied.
     }
   };
 
@@ -961,6 +962,7 @@ export default function App() {
                     <button 
                       onClick={() => {
                         setDestination(null);
+                        setRouteInfo(null);
                         setOrigin(null);
                         setWaypoints([]);
                         setManualOriginQuery("");
@@ -1226,7 +1228,7 @@ export default function App() {
                             <span className="font-bold text-[#00FF66]">已选终点:</span>
                             <span className="truncate max-w-[200px]">{destination.displayName}</span>
                             <button 
-                              onClick={e => { e.preventDefault(); setDestination(null); setManualSearchQuery(""); }}
+                              onClick={e => { e.preventDefault(); setDestination(null); setRouteInfo(null); setManualSearchQuery(""); }}
                               className="text-red-400 hover:underline cursor-pointer font-sans"
                             >
                               [清除]
@@ -1254,16 +1256,15 @@ export default function App() {
       )}
 
       {/* Main Navigation Area */}
-      <main className={`flex-1 flex flex-col relative overflow-hidden py-4 ${isARGlassMode ? 'bg-[#000000]' : 'bg-black'}`}>
+      <main className={`flex-1 flex flex-col relative overflow-hidden ${isARGlassMode ? 'py-0 bg-[#000000]' : 'py-4 bg-black'}`}>
         
-        {/* Map Container */}
+        {/* Map Container — in AR mode, pinned to right-bottom 110×110 */}
         <div 
-          className={`absolute transition-all duration-500 ease-in-out ${
-            isARGlassMode && isNavigating && !arSbsMode
-              ? `bottom-20 right-6 w-[220px] h-[220px] rounded-[24px] border-2 shadow-2xl overflow-hidden pointer-events-auto z-30 ${
-                  arThemeColor === 'emerald-green' ? 'border-[#00FF66]/40 shadow-[#00FF66]/10' : arThemeColor === 'neon-cyan' ? 'border-[#00E5FF]/40 shadow-[#00E5FF]/10' : 'border-[#EFFF33]/40 shadow-[#EFFF33]/15'
-                }`
-              : 'inset-0 z-0'
+          className={`${
+            isARGlassMode && !arSbsMode
+              ? 'absolute bottom-0 right-0 w-[110px] h-[110px] rounded-[12px] border-2 shadow-2xl overflow-hidden pointer-events-auto z-30 ' + 
+                (arThemeColor === 'emerald-green' ? 'border-[#00FF66]/40 shadow-[#00FF66]/10' : arThemeColor === 'neon-cyan' ? 'border-[#00E5FF]/40 shadow-[#00E5FF]/10' : 'border-[#EFFF33]/40 shadow-[#EFFF33]/15')
+              : 'absolute inset-0 z-0'
           }`}
           style={{ opacity: isARGlassMode ? mapOpacity / 100 : 1 }}
         >
@@ -1274,6 +1275,40 @@ export default function App() {
              waypoints={waypoints}
              searchResults={searchResults}
              simulatedLocation={simulatedLocation} hideControls={isARGlassMode}
+             onRouteUpdate={(info) => setRouteInfo(info)}
+             rerouteTrigger={rerouteTrigger}
+             onRequestLocation={() => {
+               // Trigger geolocation on user gesture (required by mobile browsers)
+               // Re-run watchPosition to prompt permission
+               if (navigator.geolocation) {
+                 // First try getCurrentPosition (triggers permission prompt on mobile)
+                 navigator.geolocation.getCurrentPosition(
+                   (pos) => {
+                     setCurrentLocation({
+                       lat: pos.coords.latitude,
+                       lng: pos.coords.longitude
+                     });
+                     setCurrentSpeed(pos.coords.speed ?? 0);
+                   },
+                   (err) => {
+                     console.error("Location getCurrentPosition failed:", err);
+                     // Fallback: try watchPosition
+                     navigator.geolocation.watchPosition(
+                       (pos2) => {
+                         setCurrentLocation({
+                           lat: pos2.coords.latitude,
+                           lng: pos2.coords.longitude
+                         });
+                         setCurrentSpeed(pos2.coords.speed ?? 0);
+                       },
+                       (err2) => console.error("watchPosition fallback failed:", err2),
+                       { enableHighAccuracy: true }
+                     );
+                   },
+                   { enableHighAccuracy: true, timeout: 15000 }
+                 );
+               }
+             }}
            />
         </div>
 
@@ -1281,15 +1316,15 @@ export default function App() {
           <div className="absolute inset-0 z-10 flex h-full w-full pointer-events-none">
             {arSbsMode ? (
               <div className="grid grid-cols-2 w-full h-full divide-x divide-white/10 bg-[#000000]/40">
-                <div className="relative h-full flex flex-col justify-center items-center overflow-hidden">
+                <div className="relative h-full flex flex-col overflow-hidden">
                   {renderARHUD('left')}
                 </div>
-                <div className="relative h-full flex flex-col justify-center items-center overflow-hidden">
+                <div className="relative h-full flex flex-col overflow-hidden">
                   {renderARHUD('right')}
                 </div>
               </div>
             ) : (
-              <div className="relative w-full h-full flex flex-col justify-center items-center bg-[#000000]/20">
+              <div className="relative w-full h-full flex flex-col bg-[#000000]/20">
                 {renderARHUD('mono')}
               </div>
             )}
@@ -1307,7 +1342,7 @@ export default function App() {
 
         {/* Search Results Overlay */}
         {searchResults.length > 0 && (
-          <div className="absolute bottom-12 right-0 w-80 sm:w-[500px] bg-[#EFFF33] text-black p-4 sm:p-6 rounded-l-[30px] transform shadow-2xl z-10 flex flex-col max-h-[60vh]">
+          <div className="absolute bottom-12 right-0 w-80 sm:w-[500px] bg-[#EFFF33] text-black p-4 sm:p-6 rounded-l-[30px] transform shadow-2xl z-[999] flex flex-col max-h-[60vh]">
             <div className="flex justify-between items-center mb-4 shrink-0">
               <span className="text-[10px] uppercase tracking-[0.2em] font-black opacity-50">Ask or Click to Select</span>
               <button onClick={() => setSearchResults([])} className="hover:bg-black/10 p-1 rounded-full"><X size={16}/></button>
@@ -1384,21 +1419,36 @@ export default function App() {
             <div className="grid grid-cols-2 gap-4 border-y border-white/10 py-3.5">
               <div className="flex flex-col">
                 <span className="text-[9px] uppercase tracking-[0.1em] text-white/40 font-bold">Total Distance</span>
-                <span className="text-base font-mono font-bold text-white uppercase">{waypoints.length > 0 ? `${(5.0 + waypoints.length * 1.5).toFixed(1)} KM` : "5.0 KM"}</span>
+                <span className="text-base font-mono font-bold text-white uppercase">
+                  {routeInfo
+                    ? `${(routeInfo.distanceMeters / 1000).toFixed(1)} KM`
+                    : waypoints.length > 0
+                      ? `${(5.0 + waypoints.length * 1.5).toFixed(1)} KM`
+                      : "5.0 KM"}
+                </span>
               </div>
               <div className="flex flex-col">
                 <span className="text-[9px] uppercase tracking-[0.1em] text-white/40 font-bold">Estimated Time</span>
-                <span className="text-base font-mono font-bold text-white uppercase">{waypoints.length > 0 ? `${12 + waypoints.length * 4} MIN` : "12 MIN"}</span>
+                <span className="text-base font-mono font-bold text-white uppercase">
+                  {routeInfo
+                    ? `${Math.round(routeInfo.timeSeconds / 60)} MIN`
+                    : waypoints.length > 0
+                      ? `${12 + waypoints.length * 4} MIN`
+                      : "12 MIN"}
+                </span>
               </div>
             </div>
             
             <button 
               onClick={() => {
-                setIsNavigating(true);
+                setShowManualSearch(false);
+                // Defer navigation state to avoid render blocking
+                setTimeout(() => {
+                  setIsNavigating(true);
+                }, 50);
                 setNavStepIndex(0);
                 setLastSpokenStepIndex(null);
-                setIsAutoPlaying(false); // Default to Real-world GPS/manual mode to prevent auto-scrolling
-                setShowManualSearch(false);
+                setIsAutoPlaying(false);
               }}
               className="w-full bg-[#EFFF33] text-black font-black uppercase text-xs tracking-wider py-4 rounded-xl hover:bg-[#d6e52c] transition duration-200 flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(239,255,51,0.2)] focus:outline-none cursor-pointer"
             >
@@ -1414,7 +1464,8 @@ export default function App() {
           const currentStep = steps[navStepIndex];
           if (!currentStep) return null;
           return (
-            <div className="absolute left-6 bottom-6 z-20 w-[340px] sm:w-[400px] bg-black/90 border border-white/15 p-6 rounded-[30px] shadow-[0_25px_60px_rgba(0,0,0,0.9)] backdrop-blur-lg flex flex-col gap-5 text-left">
+            <div className="absolute left-4 bottom-4 z-20 w-[260px] sm:w-[300px] border border-white/10 rounded-[24px] shadow-[0_15px_40px_rgba(0,0,0,0.7)] backdrop-blur-xl flex flex-col gap-3 text-left" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+              {/* Speedometer & action heading */}
               {/* Speedometer & action heading */}
               <div className="flex items-center justify-between border-b border-white/10 pb-4">
                 <div className="flex items-center gap-4">
@@ -1476,16 +1527,16 @@ export default function App() {
                 <div className="flex flex-col">
                   <span className="text-[9px] uppercase tracking-[0.1em] text-white/40 font-bold">Remaining Dist.</span>
                   <span className="text-xl font-mono font-black text-white mt-0.5">
-                    {simulatedDistance >= 1000 
-                      ? `${(simulatedDistance / 1000).toFixed(1)} KM` 
-                      : `${simulatedDistance} M`
+                    {currentStep.distanceLeftMeters >= 1000 
+                      ? `${(currentStep.distanceLeftMeters / 1000).toFixed(1)} KM` 
+                      : `${currentStep.distanceLeftMeters} M`
                     }
                   </span>
                 </div>
                 <div className="flex flex-col">
                   <span className="text-[9px] uppercase tracking-[0.1em] text-white/40 font-bold">ETA Countdown</span>
                   <span className="text-xl font-mono font-black text-[#EFFF33] mt-0.5">
-                    {simulatedETA} MIN
+                    {currentStep.etaLeftMinutes} MIN
                   </span>
                 </div>
               </div>
@@ -1538,13 +1589,14 @@ export default function App() {
 
       {/* Bottom Interaction Bar */}
       {!isARGlassMode && (
-        <footer className="h-24 bg-[#141414] border-t border-white/5 flex items-center px-4 sm:px-8 gap-4 sm:gap-6 z-10 shrink-0 shadow-[0_-10px_30px_rgba(0,0,0,0.5)]">
+        <footer className="h-24 bg-[#141414] border-t border-white/5 flex items-center px-4 sm:px-8 gap-4 sm:gap-6 z-50 shrink-0 shadow-[0_-10px_30px_rgba(0,0,0,0.5)]">
           {/* Voice Indicator */}
           <div className="flex flex-col sm:flex-row sm:items-center gap-4 flex-1 min-w-0">
             <div className="flex items-center gap-4">
               <button 
-                onClick={toggleListening}
-                className={`w-12 h-12 rounded-full flex items-center justify-center transition-all border shrink-0 ${
+                onClick={(e) => { e.preventDefault(); toggleListening(); }}
+                type="button"
+                className={`w-12 h-12 rounded-full flex items-center justify-center transition-all border shrink-0 cursor-pointer active:scale-95 ${
                   isListening 
                     ? 'bg-[#EFFF33] text-black border-[#EFFF33] shadow-[0_0_20px_rgba(239,255,51,0.3)] animate-pulse' 
                     : 'bg-transparent text-white border-white/20 hover:bg-white/10'
@@ -1570,21 +1622,21 @@ export default function App() {
               )}
             </div>
   
-            <span className="hidden sm:block text-[10px] font-black uppercase text-white/40 tracking-[0.2em] truncate break-all max-w-[200px] md:max-w-md">
-              {systemMessage}
+            <span className="block text-[10px] font-black uppercase text-white/40 tracking-[0.2em] truncate break-all max-w-[200px] md:max-w-md">
+              {systemMessage || "点击麦克风开始语音导航"}
             </span>
           </div>
   
-          {/* Quick Text Input */}
-          <form onSubmit={handleTextSubmit} className="relative w-48 sm:w-64 md:w-96 shrink-0 hidden lg:block">
+          {/* Quick Text Input — 语音失效时的回退方案 */}
+          <form onSubmit={(e) => { e.preventDefault(); executeCommand(inputText); setInputText(''); }} className="relative w-32 sm:w-48 md:w-96 shrink-0">
             <input 
               type="text" 
               value={inputText}
               onChange={e => setInputText(e.target.value)}
-              placeholder="TYPE COMMAND..." 
-              className="w-full bg-white/5 border border-white/10 rounded-full py-3 px-6 text-sm font-bold uppercase tracking-tight focus:outline-none focus:border-[#EFFF33] text-white placeholder-white/20"
+              placeholder="输入目的地..." 
+              className="w-full bg-white/5 border border-white/10 rounded-full py-2 px-4 text-xs font-bold uppercase tracking-tight focus:outline-none focus:border-[#EFFF33] text-white placeholder-white/20"
             />
-            <button type="submit" className="absolute right-4 top-1/2 -translate-y-1/2 text-[10px] font-black text-white/50 hover:text-[#EFFF33] uppercase tracking-widest transition">Enter</button>
+            <button type="submit" className="absolute right-3 top-1/2 -translate-y-1/2 text-[8px] font-black text-white/50 hover:text-[#EFFF33] uppercase tracking-widest transition">GO</button>
           </form>
   
           {/* System Settings / AI Status */}
